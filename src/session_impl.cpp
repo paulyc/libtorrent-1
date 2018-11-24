@@ -1884,6 +1884,7 @@ namespace aux {
 #ifndef BOOST_NO_EXCEPTIONS
 		catch (std::exception const& e)
 		{
+			TORRENT_UNUSED(e);
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log())
 			{
@@ -2724,27 +2725,19 @@ namespace aux {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log())
 			{
-				session_log(" <== INCOMING CONNECTION FAILED, could "
-					"not retrieve remote endpoint: %s"
-					, ec.message().c_str());
+				session_log(" <== INCOMING CONNECTION [ rejected, could "
+					"not retrieve remote endpoint: %s ]"
+					, print_error(ec).c_str());
 			}
 #endif
 			return;
 		}
 
-#ifndef TORRENT_DISABLE_LOGGING
-		if (should_log())
-		{
-			session_log(" <== INCOMING CONNECTION %s type: %s"
-				, print_endpoint(endp).c_str(), s->type_name());
-		}
-#endif
-
 		if (!m_settings.get_bool(settings_pack::enable_incoming_utp)
 			&& is_utp(*s))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			session_log("    rejected uTP connection");
+			session_log("<== INCOMING CONNECTION [ rejected uTP connection ]");
 #endif
 			if (m_alerts.should_post<peer_blocked_alert>())
 				m_alerts.emplace_alert<peer_blocked_alert>(torrent_handle()
@@ -2756,7 +2749,7 @@ namespace aux {
 			&& s->get<tcp::socket>())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			session_log("    rejected TCP connection");
+			session_log("<== INCOMING CONNECTION [ rejected TCP connection ]");
 #endif
 			if (m_alerts.should_post<peer_blocked_alert>())
 				m_alerts.emplace_alert<peer_blocked_alert>(torrent_handle()
@@ -2774,8 +2767,8 @@ namespace aux {
 #ifndef TORRENT_DISABLE_LOGGING
 				if (should_log())
 				{
-					session_log("    rejected connection: (%d) %s", ec.value()
-						, ec.message().c_str());
+					session_log("<== INCOMING CONNECTION [ rejected connection: %s ]"
+						, print_error(ec).c_str());
 				}
 #endif
 				return;
@@ -2787,7 +2780,7 @@ namespace aux {
 				if (should_log())
 				{
 					error_code err;
-					session_log("    rejected connection, local interface has incoming connections disabled: %s"
+					session_log("<== INCOMING CONNECTION [ rejected, local interface has incoming connections disabled: %s ]"
 						, local.address().to_string(err).c_str());
 				}
 #endif
@@ -2796,16 +2789,15 @@ namespace aux {
 						, endp, peer_blocked_alert::invalid_local_interface);
 				return;
 			}
-			if (!verify_bound_address(local.address()
-				, is_utp(*s), ec))
+			if (!verify_bound_address(local.address(), is_utp(*s), ec))
 			{
 				if (ec)
 				{
 #ifndef TORRENT_DISABLE_LOGGING
 					if (should_log())
 					{
-						session_log("    rejected connection, not allowed local interface: (%d) %s"
-							, ec.value(), ec.message().c_str());
+						session_log("<== INCOMING CONNECTION [ rejected, not allowed local interface: %s ]"
+							, print_error(ec).c_str());
 					}
 #endif
 					return;
@@ -2815,7 +2807,7 @@ namespace aux {
 				if (should_log())
 				{
 					error_code err;
-					session_log("    rejected connection, not allowed local interface: %s"
+					session_log("<== INCOMING CONNECTION [ rejected, not allowed local interface: %s ]"
 						, local.address().to_string(err).c_str());
 				}
 #endif
@@ -2841,7 +2833,7 @@ namespace aux {
 			&& (m_ip_filter->access(endp.address()) & ip_filter::blocked))
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			session_log("filtered blocked ip");
+			session_log("<== INCOMING CONNECTION [ filtered blocked ip ]");
 #endif
 			if (m_alerts.should_post<peer_blocked_alert>())
 				m_alerts.emplace_alert<peer_blocked_alert>(torrent_handle()
@@ -2854,7 +2846,7 @@ namespace aux {
 		if (m_torrents.empty())
 		{
 #ifndef TORRENT_DISABLE_LOGGING
-			session_log(" There are no torrents, disconnect");
+			session_log("<== INCOMING CONNECTION [ rejected, there are no torrents ]");
 #endif
 			return;
 		}
@@ -2892,7 +2884,7 @@ namespace aux {
 #ifndef TORRENT_DISABLE_LOGGING
 			if (should_log())
 			{
-				session_log("number of connections limit exceeded (conns: %d, limit: %d, slack: %d), connection rejected"
+				session_log("<== INCOMING CONNECTION [ connections limit exceeded, conns: %d, limit: %d, slack: %d ]"
 					, num_connections(), m_settings.get_int(settings_pack::connections_limit)
 					, m_settings.get_int(settings_pack::connections_slack));
 			}
@@ -2913,7 +2905,7 @@ namespace aux {
 			if (!has_active_torrent)
 			{
 #ifndef TORRENT_DISABLE_LOGGING
-				session_log(" There are no _active_ torrents, disconnect");
+				session_log("<== INCOMING CONNECTION [ rejected, no active torrents ]");
 #endif
 				return;
 			}
@@ -2931,9 +2923,9 @@ namespace aux {
 			if (err && should_log())
 			{
 				error_code ignore;
-				session_log("socket buffer size [ %s %d]: (%d) %s"
+				session_log("socket buffer size [ %s %d ]: %s"
 					, s->local_endpoint().address().to_string(ignore).c_str()
-					, s->local_endpoint().port(), err.value(), err.message().c_str());
+					, s->local_endpoint().port(), print_error(err).c_str());
 			}
 #endif
 		}
@@ -5519,11 +5511,16 @@ namespace aux {
 		if (t->torrent_file().priv() || (t->torrent_file().is_i2p()
 			&& !m_settings.get_bool(settings_pack::allow_i2p_mixed))) return;
 
+		t->add_peer(peer, peer_info::lsd);
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log())
-			session_log("added peer from local discovery: %s", print_endpoint(peer).c_str());
+		{
+			error_code ec;
+			t->debug_log("lsd add_peer() [ %s ]"
+				, peer.address().to_string(ec).c_str());
+		}
 #endif
-		t->add_peer(peer, peer_info::lsd);
+
 		t->do_connect_boost();
 
 		if (m_alerts.should_post<lsd_peer_alert>())
@@ -6929,20 +6926,17 @@ namespace aux {
 	void session_impl::set_external_address(std::shared_ptr<listen_socket_t> const& sock
 		, address const& ip, ip_source_t const source_type, address const& source)
 	{
+		if (!sock->external_address.cast_vote(ip, source_type, source)) return;
+
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log())
 		{
-			session_log(": set_external_address(%s, %d, %s)"
+			session_log("external address updated for %s [ new-ip: %s type: %d last-voter: %s ]"
+				, sock->device.empty() ? print_endpoint(sock->local_endpoint).c_str() : sock->device.c_str()
 				, print_address(ip).c_str()
 				, static_cast<std::uint8_t>(source_type)
 				, print_address(source).c_str());
 		}
-#endif
-
-		if (!sock->external_address.cast_vote(ip, source_type, source)) return;
-
-#ifndef TORRENT_DISABLE_LOGGING
-		session_log("  external IP updated");
 #endif
 
 		if (m_alerts.should_post<external_ip_alert>())
