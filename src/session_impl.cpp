@@ -534,8 +534,9 @@ namespace aux {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (should_log())
 		{
-			session_log("   max connections: %d", m_settings.get_int(settings_pack::connections_limit));
-			session_log("   max files: %d", max_files);
+			session_log("max-connections: %d max-files: %d"
+				, m_settings.get_int(settings_pack::connections_limit)
+				, max_files);
 		}
 #endif
 
