@@ -836,4 +836,7 @@ if(build_tests)
 	add_subdirectory(test)
 endif()
 
+add_executable(track src/apps/track.cpp)
+target_link_libraries(track torrent-rasterbar)
+
 feature_summary(DEFAULT_DESCRIPTION WHAT ALL)
