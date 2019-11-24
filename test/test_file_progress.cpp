@@ -1,6 +1,7 @@
 /*
 
-Copyright (c) 2015, Arvid Norberg
+Copyright (c) 2015-2019, Arvid Norberg
+Copyright (c) 2018-2019, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -52,7 +53,7 @@ TORRENT_TEST(init)
 	fs.add_file("torrent/6", 100000);
 	fs.add_file("torrent/7", 30);
 	fs.set_piece_length(piece_size);
-	fs.set_num_pieces((int(fs.total_size()) + piece_size - 1) / piece_size);
+	fs.set_num_pieces(aux::calc_num_pieces(fs));
 
 	for (auto const idx : fs.piece_range())
 	{
@@ -83,7 +84,7 @@ TORRENT_TEST(init2)
 	fs.add_file("torrent/1", 100000);
 	fs.add_file("torrent/2", 10);
 	fs.set_piece_length(piece_size);
-	fs.set_num_pieces((int(fs.total_size()) + piece_size - 1) / piece_size);
+	fs.set_num_pieces(aux::calc_num_pieces(fs));
 
 	for (auto const idx : fs.piece_range())
 	{
@@ -104,5 +105,37 @@ TORRENT_TEST(init2)
 	}
 }
 
-// TODO: test the update function too
+TORRENT_TEST(update_simple_sequential)
+{
+	int const piece_size = 256;
 
+	file_storage fs;
+	fs.add_file("torrent/1", 100000);
+	fs.add_file("torrent/2", 100);
+	fs.add_file("torrent/3", 45000);
+	fs.set_piece_length(piece_size);
+	fs.set_num_pieces(aux::calc_num_pieces(fs));
+
+	piece_picker picker(4, fs.total_size() % 4, fs.num_pieces());
+
+	aux::file_progress fp;
+
+	fp.init(picker, fs);
+
+	int count = 0;
+
+	for (auto const idx : fs.piece_range())
+	{
+		fp.update(fs, idx, [&](file_index_t const file_index)
+		{
+			count++;
+
+			aux::vector<std::int64_t, file_index_t> vec;
+			fp.export_progress(vec);
+
+			TEST_EQUAL(vec[file_index], fs.file_size(file_index));
+		});
+	}
+
+	TEST_EQUAL(count, fs.num_files());
+}

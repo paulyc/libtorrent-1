@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2013, 2015-2019, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016-2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,7 +36,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_BROADCAST_SOCKET_HPP_INCLUDED
 
 #include "libtorrent/config.hpp"
-#include "libtorrent/io_service_fwd.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/socket.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/error_code.hpp"
@@ -76,10 +78,10 @@ namespace libtorrent {
 	class TORRENT_EXTRA_EXPORT broadcast_socket
 	{
 	public:
-		explicit broadcast_socket(udp::endpoint const& multicast_endpoint);
+		explicit broadcast_socket(udp::endpoint multicast_endpoint);
 		~broadcast_socket() { close(); }
 
-		void open(receive_handler_t handler, io_service& ios
+		void open(receive_handler_t handler, io_context& ios
 			, error_code& ec, bool loopback = true);
 
 		enum flags_t { flag_broadcast = 1 };
@@ -118,15 +120,15 @@ namespace libtorrent {
 			address_v4 broadcast_address() const
 			{
 				error_code ec;
-				return address_v4::broadcast(socket->local_endpoint(ec).address().to_v4(), netmask);
+				return make_network_v4(socket->local_endpoint(ec).address().to_v4(), netmask).broadcast();
 			}
 		};
 
 		void on_receive(socket_entry* s, error_code const& ec
 			, std::size_t bytes_transferred);
-		void open_unicast_socket(io_service& ios, address const& addr
+		void open_unicast_socket(io_context& ios, address const& addr
 			, address_v4 const& mask);
-		void open_multicast_socket(io_service& ios, address const& addr
+		void open_multicast_socket(io_context& ios, address const& addr
 			, bool loopback, error_code& ec);
 
 		// if we're aborting, destruct the handler and return true

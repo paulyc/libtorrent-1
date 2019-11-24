@@ -1,6 +1,7 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2010, 2012, 2014-2019, Arvid Norberg
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -56,7 +57,7 @@ namespace libtorrent {
 		// this is the constructor where the we are the active part.
 		// The peer_connection should handshake and verify that the
 		// other end has the correct id
-		http_seed_connection(peer_connection_args const& pack
+		http_seed_connection(peer_connection_args& pack
 			, web_seed_t& web);
 
 		connection_type type() const override

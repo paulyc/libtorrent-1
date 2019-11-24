@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2017-2018, Steven Siloti
+Copyright (c) 2017-2019, Arvid Norberg
+Copyright (c) 2017-2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -36,7 +38,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/write_resume_data.hpp"
 #include "libtorrent/add_torrent_params.hpp"
 #include "libtorrent/socket_io.hpp" // for write_*_endpoint()
-#include "libtorrent/hasher.hpp"
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/aux_/numeric_cast.hpp"
 #include "libtorrent/torrent.hpp" // for default_piece_priority
@@ -48,7 +49,7 @@ namespace libtorrent {
 	{
 		entry ret;
 
-		using namespace libtorrent::detail; // for write_*_endpoint()
+		using namespace libtorrent::aux; // for write_*_endpoint()
 		ret["file-format"] = "libtorrent resume file";
 		ret["file-version"] = 1;
 		ret["libtorrent-version"] = LIBTORRENT_VERSION;
@@ -83,10 +84,10 @@ namespace libtorrent {
 #if TORRENT_ABI_VERSION == 1
 		// deprecated in 1.2
 		if (!atp.url.empty()) ret["url"] = atp.url;
-		if (!atp.uuid.empty()) ret["uuid"] = atp.uuid;
 #endif
 
-		ret["info-hash"] = atp.info_hash;
+		ret["info-hash"] = atp.info_hash.v1;
+		ret["info-hash2"] = atp.info_hash.v2;
 
 		if (atp.ti)
 		{
@@ -95,14 +96,33 @@ namespace libtorrent {
 			ret["info"].preformatted().assign(&info[0], &info[0] + size);
 		}
 
-		if (!atp.merkle_tree.empty())
+		if (!atp.merkle_trees.empty())
 		{
-			// we need to save the whole merkle hash tree
-			// in order to resume
-			std::string& tree_str = ret["merkle tree"].string();
-			auto const& tree = atp.merkle_tree;
-			tree_str.resize(tree.size() * 20);
-			std::memcpy(&tree_str[0], &tree[0], tree.size() * 20);
+			auto& trees = atp.merkle_trees;
+			auto& ret_trees = ret["trees"].list();
+			ret_trees.reserve(atp.merkle_trees.size());
+			for (file_index_t f(0); f < file_index_t{int(atp.merkle_trees.size())}; ++f)
+			{
+				auto& tree = trees[f];
+				ret_trees.emplace_back(entry::dictionary_t);
+				auto& ret_dict = ret_trees.back().dict();
+				auto& ret_tree = ret_dict["hashes"].string();
+
+				ret_tree.reserve(tree.size() * 32);
+				for (auto const& n : tree)
+					ret_tree.append(n.data(), n.size());
+
+				if (!atp.verified_leaf_hashes.empty())
+				{
+					auto& verified = atp.verified_leaf_hashes[f];
+					if (!verified.empty())
+					{
+						auto& ret_verified = ret_dict["verified"].string();
+						for (auto const bit : verified)
+							ret_verified.push_back(bit ? '1' : '0');
+					}
+				}
+			}
 		}
 
 		if (!atp.unfinished_pieces.empty())
@@ -180,7 +200,7 @@ namespace libtorrent {
 			entry::list_type& fl = ret["mapped_files"].list();
 			for (auto const& ent : atp.renamed_files)
 			{
-				std::size_t const idx(static_cast<std::size_t>(static_cast<int>(ent.first)));
+				auto const idx = static_cast<std::size_t>(static_cast<int>(ent.first));
 				if (idx >= fl.size()) fl.resize(idx + 1);
 				fl[idx] = ent.second;
 			}

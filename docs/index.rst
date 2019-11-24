@@ -15,6 +15,7 @@
 * building_
 * troubleshooting_
 * `tuning`_
+* fuzzing_
 * screenshot_
 * `mailing list`_ (archive_)
 * `who's using libtorrent?`_
@@ -68,8 +69,10 @@ libtorrent
 .. _overview: manual-ref.html
 .. _documentation: reference.html
 .. _`libtorrent 1.2`: upgrade_to_1.2-ref.html
+.. _`libtorrent 2.0`: upgrade_to_2.0-ref.html
 .. _troubleshooting: troubleshooting.html
 .. _`tuning`: tuning.html
+.. _fuzzing: fuzzing.html
 .. _screenshot: client_test.png
 .. _`uTP`: utp.html
 .. _`extensions protocol`: extension_protocol.html
@@ -120,7 +123,7 @@ The tutorial_ is an introduction to using libtorrent (C++). Also see the
 Contribute
 ==========
 
-If your organization use libtorrent, please consider supporting its development.
+If your organization uses libtorrent, please consider supporting its development.
 See the contribute_ page for other ways to help out.
 
 .. raw:: html

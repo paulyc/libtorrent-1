@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2014-2018, Steven Siloti
+Copyright (c) 2015-2019, Arvid Norberg
+Copyright (c) 2015-2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -36,12 +38,14 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/throw.hpp"
 #include "libtorrent/aux_/path.hpp"
 #include "libtorrent/torrent.hpp"
-#include "libtorrent/lazy_entry.hpp"
+#include "libtorrent/hasher.hpp"
 #include "libtorrent/peer_class.hpp"
 #include "libtorrent/peer_class_type_filter.hpp"
+#include "libtorrent/aux_/scope_end.hpp"
 
 #if TORRENT_ABI_VERSION == 1
 #include "libtorrent/read_resume_data.hpp"
+#include "libtorrent/lazy_entry.hpp"
 #endif
 
 using libtorrent::aux::session_impl;
@@ -53,7 +57,9 @@ namespace libtorrent {
 	constexpr peer_class_t session_handle::local_peer_class_id;
 
 	constexpr save_state_flags_t session_handle::save_settings;
-	constexpr save_state_flags_t session_handle::save_dht_settings;
+#if TORRENT_ABI_VERSION <= 2
+	constexpr save_state_flags_t session_handle::save_dht_settings TORRENT_DEPRECATED;
+#endif
 	constexpr save_state_flags_t session_handle::save_dht_state;
 #if TORRENT_ABI_VERSION == 1
 	constexpr save_state_flags_t session_handle::save_encryption_settings;
@@ -67,7 +73,9 @@ namespace libtorrent {
 #endif
 
 	constexpr session_flags_t session_handle::add_default_plugins;
+#if TORRENT_ABI_VERSION == 1
 	constexpr session_flags_t session_handle::start_default_features;
+#endif
 
 	constexpr remove_flags_t session_handle::delete_files;
 	constexpr remove_flags_t session_handle::delete_partfile;
@@ -79,7 +87,7 @@ namespace libtorrent {
 	{
 		std::shared_ptr<session_impl> s = m_impl.lock();
 		if (!s) aux::throw_ex<system_error>(errors::invalid_session_handle);
-		s->get_io_service().dispatch([=]() mutable
+		dispatch(s->get_context(), [=]() mutable
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -109,7 +117,7 @@ namespace libtorrent {
 		bool done = false;
 
 		std::exception_ptr ex;
-		s->get_io_service().dispatch([=, &done, &ex]() mutable
+		dispatch(s->get_context(), [=, &done, &ex]() mutable
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -141,7 +149,7 @@ namespace libtorrent {
 		bool done = false;
 		Ret r;
 		std::exception_ptr ex;
-		s->get_io_service().dispatch([=, &r, &done, &ex]() mutable
+		dispatch(s->get_context(), [=, &r, &done, &ex]() mutable
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -215,11 +223,11 @@ namespace libtorrent {
 		async_call(&session_impl::post_dht_stats);
 	}
 
-	io_service& session_handle::get_io_service()
+	io_context& session_handle::get_context()
 	{
 		std::shared_ptr<session_impl> s = m_impl.lock();
 		if (!s) aux::throw_ex<system_error>(errors::invalid_session_handle);
-		return s->get_io_service();
+		return s->get_context();
 	}
 
 	torrent_handle session_handle::find_torrent(sha1_hash const& info_hash) const
@@ -311,7 +319,6 @@ namespace {
 		atp.last_upload = resume_data.last_upload;
 		atp.last_download = resume_data.last_download;
 		atp.url = resume_data.url;
-		atp.uuid = resume_data.uuid;
 
 		atp.added_time = resume_data.added_time;
 		atp.completed_time = resume_data.completed_time;
@@ -323,8 +330,6 @@ namespace {
 		atp.have_pieces.swap(resume_data.have_pieces);
 		atp.verified_pieces.swap(resume_data.verified_pieces);
 		atp.piece_priorities.swap(resume_data.piece_priorities);
-
-		atp.merkle_tree = std::move(resume_data.merkle_tree);
 
 		atp.renamed_files = std::move(resume_data.renamed_files);
 
@@ -409,7 +414,9 @@ namespace {
 		// we cannot capture a unique_ptr into a lambda in c++11, so we use a raw
 		// pointer for now. async_call uses a lambda expression to post the call
 		// to the main thread
+		// TODO: in C++14, use unique_ptr and move it into the lambda
 		auto* p = new add_torrent_params(std::move(params));
+		auto guard = aux::scope_end([p]{ delete p; });
 		p->save_path = complete(p->save_path);
 
 #if TORRENT_ABI_VERSION == 1
@@ -417,6 +424,7 @@ namespace {
 #endif
 
 		async_call(&session_impl::async_add_torrent, p);
+		guard.disarm();
 	}
 
 #ifndef BOOST_NO_EXCEPTIONS
@@ -427,10 +435,9 @@ namespace {
 		, std::string const& save_path
 		, entry const& resume_data
 		, storage_mode_t storage_mode
-		, bool paused
-		, storage_constructor_type sc)
+		, bool paused)
 	{
-		add_torrent_params p(std::move(sc));
+		add_torrent_params p;
 		p.ti = std::make_shared<torrent_info>(ti);
 		p.save_path = save_path;
 		if (resume_data.type() != entry::undefined_t)
@@ -451,14 +458,13 @@ namespace {
 		, entry const& resume_data
 		, storage_mode_t storage_mode
 		, bool paused
-		, storage_constructor_type sc
 		, void* userdata)
 	{
 		TORRENT_ASSERT_PRECOND(!save_path.empty());
 
-		add_torrent_params p(std::move(sc));
+		add_torrent_params p;
 		p.trackers.push_back(tracker_url);
-		p.info_hash = info_hash;
+		p.info_hash.v1 = info_hash;
 		p.save_path = save_path;
 		p.storage_mode = storage_mode;
 
@@ -502,29 +508,6 @@ namespace {
 		return sync_call_ret<session_status>(&session_impl::status);
 	}
 
-	void session_handle::get_cache_info(sha1_hash const& ih
-		, std::vector<cached_piece_info>& ret) const
-	{
-		cache_status st;
-		get_cache_info(&st, find_torrent(ih));
-		ret.swap(st.pieces);
-	}
-
-	cache_status session_handle::get_cache_status() const
-	{
-		cache_status st;
-		get_cache_info(&st);
-		return st;
-	}
-#endif
-
-	void session_handle::get_cache_info(cache_status* ret
-		, torrent_handle h, int flags) const
-	{
-		sync_call(&session_impl::get_cache_info, h, ret, flags);
-	}
-
-#if TORRENT_ABI_VERSION == 1
 	void session_handle::start_dht()
 	{
 		settings_pack p;
@@ -540,6 +523,7 @@ namespace {
 	}
 #endif // TORRENT_ABI_VERSION
 
+#if TORRENT_ABI_VERSION <= 2
 	void session_handle::set_dht_settings(dht::dht_settings const& settings)
 	{
 #ifndef TORRENT_DISABLE_DHT
@@ -557,6 +541,7 @@ namespace {
 		return dht::dht_settings();
 #endif
 	}
+#endif
 
 	bool session_handle::is_dht_running() const
 	{

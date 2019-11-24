@@ -1,6 +1,8 @@
 /*
 
+Copyright (c) 2016-2017, 2019, Arvid Norberg
 Copyright (c) 2016, Alden Torres
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -43,7 +45,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "setup_transfer.hpp"
 
 using namespace lt;
-using namespace lt::dht;
+using dht::dht_storage_interface;
+using dht::dht_state;
 
 namespace
 {
@@ -51,10 +54,10 @@ namespace
 	bool g_storage_constructor_invoked = false;
 
 	std::unique_ptr<dht_storage_interface> dht_custom_storage_constructor(
-		dht::dht_settings const& settings)
+		settings_interface const& settings)
 	{
 		g_storage_constructor_invoked = true;
-		return dht_default_storage_constructor(settings);
+		return dht::dht_default_storage_constructor(settings);
 	}
 #endif
 
@@ -104,10 +107,8 @@ TORRENT_TEST(dht_state)
 {
 	settings_pack p = settings();
 	p.set_bool(settings_pack::enable_dht, true);
-
-	dht::dht_settings sett;
-	sett.max_dht_items = 10000;
-	sett.max_peers = 20000;
+	p.set_int(settings_pack::dht_max_dht_items, 10000);
+	p.set_int(settings_pack::dht_max_peers, 20000);
 
 	dht_state s;
 	s.nids.emplace_back(addr4("0.0.0.0"), to_hash("0000000000000000000000000000000000000001"));
@@ -117,7 +118,6 @@ TORRENT_TEST(dht_state)
 	s.nids.emplace_back(addr6("::"), to_hash("0000000000000000000000000000000000000002"));
 
 	session_params params(p);
-	params.dht_settings = sett;
 	params.dht_state = s;
 
 	lt::session ses1(params);
@@ -134,8 +134,8 @@ TORRENT_TEST(dht_state)
 	TEST_CHECK(!r);
 
 	session_params params1 = read_session_params(n);
-	TEST_EQUAL(params1.dht_settings.max_dht_items, 10000);
-	TEST_EQUAL(params1.dht_settings.max_peers, 20000);
+	TEST_EQUAL(params1.settings.get_int(settings_pack::dht_max_dht_items), 10000);
+	TEST_EQUAL(params1.settings.get_int(settings_pack::dht_max_peers), 20000);
 
 	// not a chance the nid will be the fake initial ones
 	TEST_CHECK(params1.dht_state.nids[0].second != s.nids[0].second);

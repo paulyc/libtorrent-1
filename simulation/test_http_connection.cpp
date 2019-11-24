@@ -41,7 +41,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/proxy_settings.hpp"
 #include "libtorrent/http_connection.hpp"
 #include "libtorrent/resolver.hpp"
-#include "libtorrent/io.hpp"
+#include "libtorrent/random.hpp"
 
 #include "make_proxy_settings.hpp"
 
@@ -52,7 +52,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 using namespace lt;
 using namespace sim;
-namespace io = lt::detail;
 
 using chrono::duration_cast;
 
@@ -66,30 +65,30 @@ struct sim_config : sim::default_config
 	{
 		if (hostname == "try-next.com")
 		{
-			result.push_back(address_v4::from_string("10.0.0.10"));
-			result.push_back(address_v4::from_string("10.0.0.9"));
-			result.push_back(address_v4::from_string("10.0.0.8"));
-			result.push_back(address_v4::from_string("10.0.0.7"));
-			result.push_back(address_v4::from_string("10.0.0.6"));
-			result.push_back(address_v4::from_string("10.0.0.5"));
-			result.push_back(address_v4::from_string("10.0.0.4"));
-			result.push_back(address_v4::from_string("10.0.0.3"));
+			result.push_back(make_address_v4("10.0.0.10"));
+			result.push_back(make_address_v4("10.0.0.9"));
+			result.push_back(make_address_v4("10.0.0.8"));
+			result.push_back(make_address_v4("10.0.0.7"));
+			result.push_back(make_address_v4("10.0.0.6"));
+			result.push_back(make_address_v4("10.0.0.5"));
+			result.push_back(make_address_v4("10.0.0.4"));
+			result.push_back(make_address_v4("10.0.0.3"));
 
 			// this is the IP that works, all other should fail
-			result.push_back(address_v4::from_string("10.0.0.2"));
+			result.push_back(make_address_v4("10.0.0.2"));
 			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
 		}
 
 		if (hostname == "test-hostname.com")
 		{
-			result.push_back(address_v4::from_string("10.0.0.2"));
+			result.push_back(make_address_v4("10.0.0.2"));
 			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
 		}
 
 		if (hostname == "dual-stack.test-hostname.com")
 		{
-			result.push_back(address_v4::from_string("10.0.0.2"));
-			result.push_back(address_v6::from_string("ff::dead:beef"));
+			result.push_back(make_address_v4("10.0.0.2"));
+			result.push_back(make_address_v6("ff::dead:beef"));
 			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
 		}
 
@@ -116,7 +115,7 @@ std::string chunk_string(std::string s)
 	return ret;
 }
 
-std::shared_ptr<http_connection> test_request(io_service& ios
+std::shared_ptr<http_connection> test_request(io_context& ios
 	, resolver& res
 	, std::string const& url
 	, char const* expected_data
@@ -299,9 +298,9 @@ void run_test(lt::aux::proxy_settings ps, std::string url, int expect_size, int 
 	// allow sparse expected counters
 	expect_counters.resize(num_counters, 0);
 
-	sim::asio::io_service web_server(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service ios(sim, address_v4::from_string("10.0.0.1"));
-	sim::asio::io_service proxy_ios(sim, address_v4::from_string("50.50.50.50"));
+	sim::asio::io_context web_server(sim, make_address_v4("10.0.0.2"));
+	sim::asio::io_context ios(sim, make_address_v4("10.0.0.1"));
+	sim::asio::io_context proxy_ios(sim, make_address_v4("50.50.50.50"));
 	lt::resolver res(ios);
 
 	sim::http_server http(web_server, 8080);
@@ -309,7 +308,7 @@ void run_test(lt::aux::proxy_settings ps, std::string url, int expect_size, int 
 	sim::http_proxy http_p(proxy_ios, 4445);
 
 	char data_buffer[4000];
-	std::generate(data_buffer, data_buffer + sizeof(data_buffer), &std::rand);
+	lt::aux::random_bytes(data_buffer);
 
 	std::vector<int> counters(num_counters, 0);
 
@@ -406,11 +405,7 @@ void run_test(lt::aux::proxy_settings ps, std::string url, int expect_size, int 
 		, expect_status, expect_error, ps, &counters[connect_handler]
 		, &counters[handler]);
 
-	error_code e;
-	sim.run(e);
-
-	if (e) std::cerr << " run failed: " << e.message() << std::endl;
-	TEST_EQUAL(e, error_code());
+	sim.run();
 
 	TEST_EQUAL(counters.size(), expect_counters.size());
 	for (int i = 0; i < int(counters.size()); ++i)
@@ -460,12 +455,12 @@ TORRENT_TEST(http_connection_timeout_server_stalls)
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 	// server has two ip addresses (ipv4/ipv6)
-	sim::asio::io_service server_ios(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service server_ios_ipv6(sim, address_v6::from_string("ff::dead:beef"));
+	sim::asio::io_context server_ios(sim, make_address_v4("10.0.0.2"));
+	sim::asio::io_context server_ios_ipv6(sim, make_address_v6("ff::dead:beef"));
 	// same for client
-	sim::asio::io_service client_ios(sim, {
-		address_v4::from_string("10.0.0.1"),
-		address_v6::from_string("ff::abad:cafe")
+	sim::asio::io_context client_ios(sim, {
+		make_address_v4("10.0.0.1"),
+		make_address_v6("ff::abad:cafe")
 	});
 	lt::resolver resolver(client_ios);
 
@@ -477,7 +472,7 @@ TORRENT_TEST(http_connection_timeout_server_stalls)
 	http_ipv6.register_stall_handler("/timeout");
 
 	char data_buffer[4000];
-	std::generate(data_buffer, data_buffer + sizeof(data_buffer), &std::rand);
+	lt::aux::random_bytes(data_buffer);
 
 	int connect_counter = 0;
 	int handler_counter = 0;
@@ -489,9 +484,7 @@ TORRENT_TEST(http_connection_timeout_server_stalls)
 		, timed_out, lt::aux::proxy_settings()
 		, &connect_counter, &handler_counter);
 
-	error_code e;
-	sim.run(e);
-	TEST_CHECK(!e);
+	sim.run();
 	TEST_EQUAL(connect_counter, 2); // both endpoints are connected to
 	TEST_EQUAL(handler_counter, 1); // the handler only gets called once with error_code == timed_out
 }
@@ -504,14 +497,14 @@ TORRENT_TEST(http_connection_timeout_server_does_not_accept)
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 	// server has two ip addresses (ipv4/ipv6)
-	sim::asio::io_service server_ios(sim, {
-		address_v4::from_string("10.0.0.2"),
-		address_v6::from_string("ff::dead:beef")
+	sim::asio::io_context server_ios(sim, {
+		make_address_v4("10.0.0.2"),
+		make_address_v6("ff::dead:beef")
 	});
 	// same for client
-	sim::asio::io_service client_ios(sim, {
-		address_v4::from_string("10.0.0.1"),
-		address_v6::from_string("ff::abad:cafe")
+	sim::asio::io_context client_ios(sim, {
+		make_address_v4("10.0.0.1"),
+		make_address_v6("ff::abad:cafe")
 	});
 	lt::resolver resolver(client_ios);
 
@@ -534,16 +527,14 @@ TORRENT_TEST(http_connection_timeout_server_does_not_accept)
 	error_condition timed_out(boost::system::errc::timed_out, boost::system::generic_category());
 
 	char data_buffer[4000];
-	std::generate(data_buffer, data_buffer + sizeof(data_buffer), &std::rand);
+	lt::aux::random_bytes(data_buffer);
 
 	auto c = test_request(client_ios, resolver
 		, "http://dual-stack.test-hostname.com:8080/timeout_server_does_not_accept", data_buffer, -1, -1
 		, timed_out, lt::aux::proxy_settings()
 		, &connect_counter, &handler_counter);
 
-	error_code e;
-	sim.run(e);
-	TEST_CHECK(!e);
+	sim.run();
 	TEST_EQUAL(connect_counter, 0); // no connection takes place
 	TEST_EQUAL(handler_counter, 1); // the handler only gets called once with error_code == timed_out
 }
@@ -554,8 +545,8 @@ void test_proxy_failure(lt::settings_pack::proxy_type_t proxy_type)
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service web_server(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service ios(sim, address_v4::from_string("10.0.0.1"));
+	sim::asio::io_context web_server(sim, make_address_v4("10.0.0.2"));
+	sim::asio::io_context ios(sim, make_address_v4("10.0.0.1"));
 	lt::resolver res(ios);
 
 	sim::http_server http(web_server, 8080);
@@ -563,7 +554,7 @@ void test_proxy_failure(lt::settings_pack::proxy_type_t proxy_type)
 	lt::aux::proxy_settings ps = make_proxy_settings(proxy_type);
 
 	char data_buffer[4000];
-	std::generate(data_buffer, data_buffer + sizeof(data_buffer), &std::rand);
+	lt::aux::random_bytes(data_buffer);
 
 	http.register_handler("/test_file"
 		, [&data_buffer](std::string method, std::string req
@@ -582,11 +573,7 @@ void test_proxy_failure(lt::settings_pack::proxy_type_t proxy_type)
 		, error_condition(boost::system::errc::connection_refused, boost::system::generic_category())
 		, ps, &connect_counter, &handler_counter);
 
-	error_code e;
-	sim.run(e);
-
-	if (e) std::cerr << " run failed: " << e.message() << std::endl;
-	TEST_EQUAL(e, error_code());
+	sim.run();
 }
 
 // if we set up to user a proxy that does not exist, expect failure!
@@ -610,8 +597,8 @@ TORRENT_TEST(http_connection_ssl_proxy)
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service client_ios(sim, address_v4::from_string("10.0.0.1"));
-	sim::asio::io_service proxy_ios(sim, address_v4::from_string("50.50.50.50"));
+	sim::asio::io_context client_ios(sim, make_address_v4("10.0.0.1"));
+	sim::asio::io_context proxy_ios(sim, make_address_v4("50.50.50.50"));
 	lt::resolver res(client_ios);
 
 	sim::http_server http_proxy(proxy_ios, 4445);
@@ -640,13 +627,10 @@ TORRENT_TEST(http_connection_ssl_proxy)
 
 	h->start("10.0.0.2", 8080, seconds(1), 0, &ps, true /*ssl*/);
 
-	error_code e;
-	sim.run(e);
+	sim.run();
 
 	TEST_EQUAL(client_counter, 1);
 	TEST_EQUAL(proxy_counter, 1);
-	if (e) std::cerr << " run failed: " << e.message() << std::endl;
-	TEST_EQUAL(e, error_code());
 }
 
 // TODO: test http proxy with password

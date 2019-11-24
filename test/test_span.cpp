@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2017-2019, Arvid Norberg
+Copyright (c) 2017-2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -52,6 +54,25 @@ TORRENT_TEST(span_vector)
 {
 	std::vector<char> v1 = {1,2,3,4};
 	span<char> a(v1);
+	TEST_CHECK(a == f(v1));
+	TEST_CHECK(a.size() == 4);
+}
+
+TORRENT_TEST(span_vector_assignment)
+{
+	std::vector<char> v1 = {1,2,3,4};
+	span<char> a;
+	a = v1;
+	TEST_CHECK(a == f(v1));
+	TEST_CHECK(a.size() == 4);
+}
+
+TORRENT_TEST(span_assignment)
+{
+	char v1[] = {1,2,3,4};
+	span<char> a2(v1);
+	span<char> a;
+	a = a2;
 	TEST_CHECK(a == f(v1));
 	TEST_CHECK(a.size() == 4);
 }

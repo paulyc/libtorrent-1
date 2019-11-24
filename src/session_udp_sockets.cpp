@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg, Steven Siloti
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2017-2019, Arvid Norberg
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -70,20 +72,20 @@ namespace libtorrent { namespace aux {
 		if (sockets.empty())
 		{
 			ec.assign(boost::system::errc::not_supported, generic_category());
-			return tcp::endpoint();
+			return {};
 		}
 
 		utp_socket_impl* impl = nullptr;
 		transport ssl = transport::plaintext;
 #ifdef TORRENT_USE_OPENSSL
-		if (s.get<ssl_stream<utp_stream>>() != nullptr)
+		if (boost::get<ssl_stream<utp_stream>>(&s) != nullptr)
 		{
-			impl = s.get<ssl_stream<utp_stream>>()->next_layer().get_impl();
+			impl = boost::get<ssl_stream<utp_stream>>(s).next_layer().get_impl();
 			ssl = transport::ssl;
 		}
 		else
 #endif
-			impl = s.get<utp_stream>()->get_impl();
+			impl = boost::get<utp_stream>(s).get_impl();
 
 		auto& idx = index[remote_address.is_v4() ? 0 : 1][ssl == transport::ssl ? 1 : 0];
 		auto const index_begin = idx;
@@ -102,10 +104,10 @@ namespace libtorrent { namespace aux {
 
 			utp_init_socket(impl, sockets[idx]);
 			auto udp_ep = sockets[idx]->local_endpoint();
-			return tcp::endpoint(udp_ep.address(), udp_ep.port());
+			return {udp_ep.address(), udp_ep.port()};
 		}
 
-		return tcp::endpoint();
+		return {};
 	}
 
 	void outgoing_sockets::update_proxy(proxy_settings const& settings)

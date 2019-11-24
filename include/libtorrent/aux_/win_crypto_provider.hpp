@@ -34,6 +34,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_WIN_CRYPTO_PROVIDER_HPP
 
 #include "libtorrent/config.hpp"
+
+#if TORRENT_USE_CRYPTOAPI
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/aux_/throw.hpp"
 #include "libtorrent/aux_/windows.hpp"
@@ -72,7 +74,7 @@ namespace libtorrent { namespace aux {
 		crypt_hash(crypt_hash const& h) { m_hash = duplicate(h); }
 		~crypt_hash() { CryptDestroyHash(m_hash); }
 
-		crypt_hash& crypt_hash::operator=(crypt_hash const& h) &
+		crypt_hash& operator=(crypt_hash const& h) &
 		{
 			if (this == &h) return *this;
 			HCRYPTHASH temp = duplicate(h);
@@ -139,4 +141,6 @@ namespace libtorrent { namespace aux {
 } // namespace aux
 } // namespace libtorrent
 
-#endif
+#endif // TORRENT_USE_CRYPTOAPI
+
+#endif // TORRENT_WIN_CRYPTO_PROVIDER_HPP

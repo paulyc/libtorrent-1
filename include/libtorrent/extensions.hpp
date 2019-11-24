@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006-2007, 2011, 2013-2019, Arvid Norberg
+Copyright (c) 2014-2019, Steven Siloti
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2018, Greg Hazel
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -224,6 +227,11 @@ namespace libtorrent {
 		// called when plugin is added to a session
 		virtual void added(session_handle const&) {}
 
+		// called when the session is aborted
+		// the plugin should perform any cleanup necessary to allow the session's
+		// destruction (e.g. cancel outstanding async operations)
+		virtual void abort() {}
+
 		// called when a dht request is received.
 		// If your plugin expects this to be called, make sure to include the flag
 		// ``dht_request_feature`` in the return value from implemented_features().
@@ -238,7 +246,7 @@ namespace libtorrent {
 		virtual void on_alert(alert const*) {}
 
 		// return true if the add_torrent_params should be added
-		virtual bool on_unknown_torrent(sha1_hash const& /* info_hash */
+		virtual bool on_unknown_torrent(info_hash_t const& /* info_hash */
 			, peer_connection_handle const& /* pc */, add_torrent_params& /* p */)
 		{ return false; }
 
@@ -425,8 +433,20 @@ namespace libtorrent {
 		virtual bool on_reject(peer_request const&) { return false; }
 		virtual bool on_suggest(piece_index_t) { return false; }
 
+		virtual void sent_have_all() {}
+		virtual void sent_have_none() {}
+		virtual void sent_reject_request(peer_request const&) {}
+		virtual void sent_allow_fast(piece_index_t) {}
+		virtual void sent_suggest(piece_index_t) {}
+		virtual void sent_cancel(peer_request const&) {}
+		virtual void sent_request(peer_request const&) {}
+		virtual void sent_choke() {}
 		// called after a choke message has been sent to the peer
 		virtual void sent_unchoke() {}
+		virtual void sent_interested() {}
+		virtual void sent_not_interested() {}
+		virtual void sent_have(piece_index_t) {}
+		virtual void sent_piece(peer_request const&) {}
 
 		// called after piece data has been sent to the peer
 		// this can be used for stats book keeping

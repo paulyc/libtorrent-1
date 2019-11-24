@@ -37,26 +37,22 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/alert.hpp"
 #include "libtorrent/time.hpp"
 #include "libtorrent/settings_pack.hpp"
-#include "libtorrent/kademlia/dht_settings.hpp"
 #include "libtorrent/session.hpp"
 #include "libtorrent/session_stats.hpp"
 #include "libtorrent/alert_types.hpp"
 #include "libtorrent/deadline_timer.hpp"
 #include "libtorrent/socket_io.hpp"
 #include "setup_swarm.hpp"
-#include "setup_dht.hpp"
 #include "libtorrent/kademlia/ed25519.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/kademlia/item.hpp"
 #include "libtorrent/broadcast_socket.hpp"
 
+using lt::settings_pack;
+
 #ifndef TORRENT_DISABLE_DHT
 void bootstrap_session(std::vector<dht_network*> networks, lt::session& ses)
 {
-	lt::dht::dht_settings sett;
-	sett.ignore_dark_internet = false;
-	ses.set_dht_settings(sett);
-
 	lt::entry state;
 
 	for (auto dht : networks)
@@ -76,7 +72,7 @@ void bootstrap_session(std::vector<dht_network*> networks, lt::session& ses)
 		{
 			std::string node;
 			std::back_insert_iterator<std::string> out(node);
-			lt::detail::write_endpoint(n, out);
+			lt::aux::write_endpoint(n, out);
 			nodes.push_back(lt::entry(node));
 		}
 	}
@@ -90,6 +86,9 @@ void bootstrap_session(std::vector<dht_network*> networks, lt::session& ses)
 	ses.load_state(e);
 	lt::settings_pack pack;
 	pack.set_bool(lt::settings_pack::enable_dht, true);
+	pack.set_int(lt::settings_pack::alert_mask, lt::alert::all_categories);
+	pack.set_bool(settings_pack::dht_ignore_dark_internet, false);
+	pack.set_bool(settings_pack::dht_restrict_routing_ips, false);
 	ses.apply_settings(pack);
 }
 #endif // TORRENT_DISABLE_DHT
@@ -115,14 +114,14 @@ TORRENT_TEST(dht_bootstrap)
 		{
 			if (lt::dht_stats_alert const* p = lt::alert_cast<lt::dht_stats_alert>(a))
 			{
-				routing_table_depth = int(p->routing_table.size());
+				routing_table_depth = std::max(int(p->routing_table.size()), routing_table_depth);
 				int c = 0;
 				for (auto const& b : p->routing_table)
 				{
 					c += b.num_nodes;
 					c += b.num_replacements;
 				}
-				num_nodes = c;
+				num_nodes = std::max(c, num_nodes);
 				print_routing_table(p->routing_table);
 			}
 			else if (lt::session_stats_alert const* sa = lt::alert_cast<lt::session_stats_alert>(a))

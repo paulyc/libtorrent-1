@@ -1,6 +1,14 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2019, Arvid Norberg
+Copyright (c) 2003, Daniel Wallin
+Copyright (c) 2004, Magnus Jonsson
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2016-2017, Pavel Pimenov
+Copyright (c) 2017, Falcosc
+Copyright (c) 2017, AllSeeingEyeTolledEweSew
+Copyright (c) 2017-2019, Steven Siloti
+Copyright (c) 2018, d-komarov
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -41,6 +49,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <limits> // for numeric_limits
 #include <memory> // for unique_ptr
 
+#include "libtorrent/aux_/disable_warnings_push.hpp"
+#include <boost/logic/tribool.hpp>
+#include "libtorrent/aux_/disable_warnings_pop.hpp"
+
 #include "libtorrent/fwd.hpp"
 #include "libtorrent/optional.hpp"
 #include "libtorrent/torrent_handle.hpp"
@@ -53,11 +65,11 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/stat.hpp"
 #include "libtorrent/alert.hpp"
 #include "libtorrent/piece_picker.hpp"
+#include "libtorrent/hash_picker.hpp"
 #include "libtorrent/config.hpp"
 #include "libtorrent/bandwidth_limit.hpp"
 #include "libtorrent/bandwidth_queue_entry.hpp"
 #include "libtorrent/storage_defs.hpp"
-#include "libtorrent/hasher.hpp"
 #include "libtorrent/assert.hpp"
 #include "libtorrent/aux_/session_interface.hpp"
 #include "libtorrent/aux_/time.hpp"
@@ -65,10 +77,9 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/peer_class_set.hpp"
 #include "libtorrent/link.hpp"
 #include "libtorrent/vector_utils.hpp"
-#include "libtorrent/linked_list.hpp"
 #include "libtorrent/debug.hpp"
 #include "libtorrent/piece_block.hpp"
-#include "libtorrent/disk_interface.hpp" // for status_t
+#include "libtorrent/disk_interface.hpp"
 #include "libtorrent/aux_/file_progress.hpp"
 #include "libtorrent/aux_/suggest_piece.hpp"
 #include "libtorrent/units.hpp"
@@ -174,6 +185,12 @@ namespace libtorrent {
 		// callback remove it
 		bool removed = false;
 
+		// this indicates whether this web seed has any files. A server that only
+		// redirects to other servers for instance, may not have any files and
+		// once we've seen all redirects, there's no point in connecting to it
+		// again.
+		bool interesting = true;
+
 		// if this is true, this URL was created by a redirect and should not be
 		// saved in the resume data
 		bool ephemeral = false;
@@ -234,6 +251,8 @@ namespace libtorrent {
 		// difference between having everything and nothing in
 		// the case there is no piece picker, see m_have_all.
 		std::unique_ptr<piece_picker> m_picker;
+
+		std::unique_ptr<hash_picker> m_hash_picker;
 
 		// TODO: make this a raw pointer. perhaps keep the shared_ptr
 		// around further down the object to maintain an owner
@@ -316,7 +335,6 @@ namespace libtorrent {
 		, private torrent_hot_members
 		, public request_callback
 		, public peer_class_set
-		, public aux::error_handler_interface
 		, public std::enable_shared_from_this<torrent>
 	{
 	public:
@@ -326,7 +344,7 @@ namespace libtorrent {
 		~torrent() override;
 
 		// This may be called from multiple threads
-		sha1_hash const& info_hash() const { return m_info_hash; }
+		info_hash_t const& info_hash() const { return m_info_hash; }
 
 		bool is_deleted() const { return m_deleted; }
 
@@ -348,11 +366,6 @@ namespace libtorrent {
 			// make sure we decrement the gauge counter for this torrent
 			update_gauge();
 		}
-
-#if TORRENT_ABI_VERSION == 1
-		// deprecated in 1.2
-		void start_download_url();
-#endif
 
 		// returns which stats gauge this torrent currently
 		// has incremented.
@@ -395,7 +408,8 @@ namespace libtorrent {
 
 		void on_resume_data_checked(status_t status, storage_error const& error);
 		void on_force_recheck(status_t status, storage_error const& error);
-		void on_piece_hashed(piece_index_t piece, sha1_hash const& piece_hash
+		void on_piece_hashed(aux::vector<sha256_hash> block_hashes
+			, piece_index_t piece, sha1_hash const& piece_hash
 			, storage_error const& error);
 		void files_checked();
 		void start_checking();
@@ -434,9 +448,9 @@ namespace libtorrent {
 			bool fail;
 			error_code error;
 		};
-		void read_piece(piece_index_t piece);
-		void on_disk_read_complete(disk_buffer_holder block, disk_job_flags_t, storage_error const& se
-			, peer_request const& r, std::shared_ptr<read_piece_struct> rp);
+		void read_piece(piece_index_t);
+		void on_disk_read_complete(disk_buffer_holder, storage_error const&
+			, peer_request const&, std::shared_ptr<read_piece_struct>);
 
 		storage_mode_t storage_mode() const;
 
@@ -592,8 +606,8 @@ namespace libtorrent {
 		void use_interface(std::string net_interface);
 #endif
 
-		void connect_to_url_seed(std::list<web_seed_t>::iterator url);
-		bool connect_to_peer(torrent_peer* peerinfo, bool ignore_limit = false);
+		void connect_to_url_seed(std::list<web_seed_t>::iterator);
+		bool connect_to_peer(torrent_peer*, bool ignore_limit = false);
 
 		int priority() const;
 #if TORRENT_ABI_VERSION == 1
@@ -717,7 +731,7 @@ namespace libtorrent {
 		void tracker_response(
 			tracker_request const& r
 			, address const& tracker_ip
-			, std::list<address> const& ip_list
+			, std::list<address> const& tracker_ips
 			, struct tracker_response const& resp) override;
 		void tracker_request_error(tracker_request const& r
 			, error_code const& ec, const std::string& msg
@@ -749,8 +763,7 @@ namespace libtorrent {
 		// forcefully sets next_announce to the current time
 		void force_tracker_request(time_point, int tracker_idx, reannounce_flags_t flags);
 		void scrape_tracker(int idx, bool user_triggered);
-		void announce_with_tracker(std::uint8_t e
-			= tracker_request::none);
+		void announce_with_tracker(event_t = event_t::none);
 
 #ifndef TORRENT_DISABLE_DHT
 		void dht_announce();
@@ -817,6 +830,10 @@ namespace libtorrent {
 		// only once per piece
 		void we_have(piece_index_t index);
 
+		// process the v2 block hashes for a piece
+		boost::tribool on_blocks_hashed(piece_index_t piece
+			, span<sha256_hash const> block_hashes);
+
 	public:
 
 		int num_have() const
@@ -878,16 +895,17 @@ namespace libtorrent {
 
 		// this is the asio callback that is called when a name
 		// lookup for a PEER is completed.
-		void on_peer_name_lookup(error_code const& e
-			, std::vector<address> const& addrs
-			, int port);
+		void on_peer_name_lookup(error_code const&
+			, std::vector<address> const&
+			, int port
+			, protocol_version);
 
 		// this is the asio callback that is called when a name
 		// lookup for a WEB SEED is completed.
-		void on_name_lookup(error_code const& e
-			, std::vector<address> const& addrs
+		void on_name_lookup(error_code const&
+			, std::vector<address> const&
 			, int port
-			, std::list<web_seed_t>::iterator web);
+			, std::list<web_seed_t>::iterator);
 
 		void connect_web_seed(std::list<web_seed_t>::iterator web, tcp::endpoint a);
 
@@ -921,7 +939,8 @@ namespace libtorrent {
 		void resume_download();
 
 		void verify_piece(piece_index_t piece);
-		void on_piece_verified(piece_index_t piece
+		void on_piece_verified(aux::vector<sha256_hash> block_hashes
+			, piece_index_t piece
 			, sha1_hash const& piece_hash, storage_error const& error);
 
 		// this is called whenever a peer in this swarm becomes interesting
@@ -935,11 +954,14 @@ namespace libtorrent {
 		void piece_passed(piece_index_t index);
 
 		// piece_failed is called when a piece fails the hash check
-		void piece_failed(piece_index_t index);
+		// for failures detected with v2 hashes the failing blocks(s)
+		// are specified in blocks
+		// *blocks must be sorted in acending order*
+		void piece_failed(piece_index_t index, std::vector<int> blocks = std::vector<int>());
 
 		// this is the handler for hash failure piece synchronization
 		// i.e. resetting the piece
-		void on_piece_sync(piece_index_t piece);
+		void on_piece_sync(piece_index_t piece, std::vector<int> const& blocks);
 
 		// this is the handler for write failure piece synchronization
 		void on_piece_fail_sync(piece_index_t piece, piece_block b);
@@ -974,6 +996,23 @@ namespace libtorrent {
 			return m_picker.get() != nullptr;
 		}
 
+		hash_picker& get_hash_picker()
+		{
+			TORRENT_ASSERT(m_hash_picker.get());
+			return *m_hash_picker;
+		}
+		hash_picker const& get_hash_picker() const
+		{
+			TORRENT_ASSERT(m_hash_picker.get());
+			return *m_hash_picker;
+		}
+
+		void need_hash_picker(aux::vector<aux::vector<bool>, file_index_t> verified = {});
+		bool has_hash_picker() const
+		{
+			return m_hash_picker.get() != nullptr;
+		}
+
 		void update_max_failcount()
 		{
 			if (!m_peer_list) return;
@@ -985,22 +1024,17 @@ namespace libtorrent {
 
 		bool has_storage() const { return bool(m_storage); }
 		storage_index_t storage() const { return m_storage; }
-		storage_interface* get_storage_impl() const;
 
 		torrent_info const& torrent_file() const
 		{ return *m_torrent_file; }
 
-		std::shared_ptr<const torrent_info> get_torrent_copy();
+		hash_request pick_hashes(peer_connection* peer);
+		std::vector<sha256_hash> get_hashes(hash_request const& req) const;
+		bool add_hashes(hash_request const& req, span<sha256_hash> hashes);
+		void hashes_rejected(hash_request const& req);
+		void verify_block_hashes(piece_index_t index);
 
-#if TORRENT_ABI_VERSION == 1
-		// deprecated in 1.2
-		std::string const& uuid() const { return m_uuid; }
-		void set_uuid(std::string const& s) { m_uuid = s; }
-		std::string const& url() const { return m_url; }
-		void set_url(std::string const& s) { m_url = s; }
-		std::string const& source_feed_url() const { return m_source_feed_url; }
-		void set_source_feed_url(std::string const& s) { m_source_feed_url = s; }
-#endif
+		std::shared_ptr<const torrent_info> get_torrent_copy();
 
 		std::vector<announce_entry> const& trackers() const
 		{ return m_trackers; }
@@ -1014,7 +1048,7 @@ namespace libtorrent {
 
 		torrent_handle get_handle();
 
-		void write_resume_data(add_torrent_params& atp) const;
+		void write_resume_data(add_torrent_params&) const;
 
 		void seen_complete() { m_last_seen_complete = ::time(nullptr); }
 		int time_since_complete() const { return int(::time(nullptr) - m_last_seen_complete); }
@@ -1064,11 +1098,6 @@ namespace libtorrent {
 		// a return value of false indicates an error
 		bool set_metadata(span<char const> metadata);
 
-#if TORRENT_ABI_VERSION == 1
-		void on_torrent_download(error_code const& ec, http_parser const& parser
-			, span<char const> data);
-#endif
-
 		queue_position_t sequence_number() const { return m_sequence_number; }
 
 		bool seed_mode() const { return m_seed_mode; }
@@ -1089,8 +1118,6 @@ namespace libtorrent {
 		bool verified_piece(piece_index_t piece) const
 		{ return m_verified.get_bit(piece); }
 		void verified(piece_index_t piece);
-
-		bool add_merkle_nodes(std::map<int, sha1_hash> const& n, piece_index_t piece);
 
 		// this is called once periodically for torrents
 		// that are not private
@@ -1158,8 +1185,8 @@ namespace libtorrent {
 
 	private:
 
-		void on_exception(std::exception const& e) override;
-		void on_error(error_code const& ec) override;
+		void on_exception(std::exception const& e);
+		void on_error(error_code const& ec);
 
 		// trigger deferred disconnection of peers
 		void on_remove_peers() noexcept;
@@ -1205,8 +1232,8 @@ namespace libtorrent {
 
 #ifndef TORRENT_DISABLE_DHT
 		static void on_dht_announce_response_disp(std::weak_ptr<torrent> t
-			, std::vector<tcp::endpoint> const& peers);
-		void on_dht_announce_response(std::vector<tcp::endpoint> const& peers);
+			, protocol_version v, std::vector<tcp::endpoint> const& peers);
+		void on_dht_announce_response(protocol_version v, std::vector<tcp::endpoint> const& peers);
 		bool should_announce_dht() const;
 #endif
 
@@ -1290,22 +1317,6 @@ namespace libtorrent {
 
 		std::string m_save_path;
 
-#if TORRENT_ABI_VERSION == 1
-		// deprecated in 1.2
-
-		// if we don't have the metadata, this is a url to
-		// the torrent file
-		std::string m_url;
-
-		// if this was added from an RSS feed, this is the unique
-		// identifier in the feed.
-		std::string m_uuid;
-
-		// if this torrent was added by an RSS feed, this is the
-		// URL to that feed
-		std::string m_source_feed_url;
-#endif
-
 		// this is a list of all pieces that we have announced
 		// as having, without actually having yet. If we receive
 		// a request for a piece in this list, we need to hold off
@@ -1345,8 +1356,6 @@ namespace libtorrent {
 		// longer be used and will be reset
 		std::unique_ptr<std::string> m_name;
 
-		storage_constructor_type m_storage_constructor;
-
 		// the posix time this torrent was added and when
 		// it was completed. If the torrent isn't yet
 		// completed, m_completed_time is 0
@@ -1362,7 +1371,7 @@ namespace libtorrent {
 
 		// keep a copy if the info-hash here, so it can be accessed from multiple
 		// threads, and be cheap to access from the client
-		sha1_hash m_info_hash;
+		info_hash_t m_info_hash;
 
 	public:
 		// these are the lists this torrent belongs to. For more
@@ -1430,11 +1439,7 @@ namespace libtorrent {
 		// used to post a message to defer disconnecting peers
 		std::vector<std::shared_ptr<peer_connection>> m_peers_to_disconnect;
 		aux::deferred_handler m_deferred_disconnect;
-#ifdef _M_AMD64
-		aux::handler_storage<96> m_deferred_handler_storage;
-#else
-		aux::handler_storage<64> m_deferred_handler_storage;
-#endif
+		aux::handler_storage<aux::deferred_handler_max_size, aux::defer_handler> m_deferred_handler_storage;
 
 		// these are the peer IDs we've used for our outgoing peer connections for
 		// this torrent. If we get an incoming peer claiming to have one of these,
@@ -1549,7 +1554,11 @@ namespace libtorrent {
 		// whenever something is downloaded
 		bool m_need_save_resume_data:1;
 
-		// 2 bits here
+		// when this is true, this torrent participates in the DHT
+		bool m_enable_dht:1;
+
+		// when this is true, this torrent participates in local service discovery
+		bool m_enable_lsd:1;
 
 // ----
 
@@ -1574,11 +1583,12 @@ namespace libtorrent {
 		// the number of unchoked peers in this torrent
 		unsigned int m_num_uploads:24;
 
-		// 1 bit here
-
 		// rotating sequence number for LSD announces sent out.
 		// used to only use IP broadcast for every 8th lsd announce
 		std::uint8_t m_lsd_seq:3;
+
+		// when this is true, this torrent supports peer exchange
+		bool m_enable_pex:1;
 
 		// this is set to true if the torrent was started without
 		// metadata. It is used to save metadata in the resume file

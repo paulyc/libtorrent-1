@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2011, 2013-2019, Arvid Norberg
+Copyright (c) 2004, Magnus Jonsson
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2019, Amir Abrams
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -232,6 +235,8 @@ TORRENT_VERSION_NAMESPACE_2
 		// which client the peer is using. See identify_client()_
 		peer_id pid;
 
+		// the number of bytes we have requested from this peer, but not yet
+		// received.
 		int queue_bytes;
 
 		// the number of seconds until the current front piece request will time
@@ -337,7 +342,7 @@ TORRENT_VERSION_NAMESPACE_2
 		int receive_quota;
 
 		// an estimated round trip time to this peer, in milliseconds. It is
-		// estimated by timing the the TCP ``connect()``. It may be 0 for
+		// estimated by timing the TCP ``connect()``. It may be 0 for
 		// incoming connections.
 		int rtt;
 

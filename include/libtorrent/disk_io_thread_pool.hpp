@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2005-2016, Arvid Norberg, Steven Siloti
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016, 2018, Alden Torres
+Copyright (c) 2017-2019, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -36,7 +38,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/config.hpp"
 #include "libtorrent/aux_/export.hpp"
 #include "libtorrent/deadline_timer.hpp"
-#include "libtorrent/io_service_fwd.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/error_code.hpp"
 
 #include <thread>
@@ -52,7 +54,7 @@ namespace libtorrent {
 		virtual ~pool_thread_interface() {}
 
 		virtual void notify_all() = 0;
-		virtual void thread_fun(disk_io_thread_pool&, io_service::work) = 0;
+		virtual void thread_fun(disk_io_thread_pool&, executor_work_guard<io_context::executor_type>) = 0;
 	};
 
 	// this class implements the policy for creating and destroying I/O threads
@@ -64,7 +66,7 @@ namespace libtorrent {
 	struct TORRENT_EXTRA_EXPORT disk_io_thread_pool
 	{
 		disk_io_thread_pool(pool_thread_interface& thread_iface
-			, io_service& ios);
+			, io_context& ios);
 		~disk_io_thread_pool();
 
 		// set the maximum number of I/O threads which may be running
@@ -138,6 +140,8 @@ namespace libtorrent {
 
 		// timer to check for and reap idle threads
 		deadline_timer m_idle_timer;
+
+		io_context& m_ioc;
 	};
 } // namespace libtorrent
 

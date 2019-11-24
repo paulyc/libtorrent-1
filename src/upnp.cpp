@@ -1,6 +1,13 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2019, Arvid Norberg
+Copyright (c) 2009, Andrew Resch
+Copyright (c) 2015, Mike Tzou
+Copyright (c) 2016-2019, Alden Torres
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016-2017, Pavel Pimenov
+Copyright (c) 2016-2017, Andrei Kurushin
+Copyright (c) 2019, Amir Abrams
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -87,18 +94,18 @@ upnp::rootdevice::~rootdevice()
 }
 
 upnp::rootdevice::rootdevice(rootdevice const&) = default;
-upnp::rootdevice& upnp::rootdevice::operator=(rootdevice const&) = default;
+upnp::rootdevice& upnp::rootdevice::operator=(rootdevice const&) & = default;
 upnp::rootdevice::rootdevice(rootdevice&&) = default;
-upnp::rootdevice& upnp::rootdevice::operator=(rootdevice&&) = default;
+upnp::rootdevice& upnp::rootdevice::operator=(rootdevice&&) & = default;
 
 // TODO: 3 bind the broadcast socket. it would probably have to be changed to a vector of interfaces to
 // bind to, since the broadcast socket opens one socket per local
 // interface by default
-upnp::upnp(io_service& ios
-	, std::string const& user_agent
+upnp::upnp(io_context& ios
+	, std::string user_agent
 	, aux::portmap_callback& cb
 	, bool ignore_nonrouters)
-	: m_user_agent(user_agent)
+	: m_user_agent(std::move(user_agent))
 	, m_callback(cb)
 	, m_retry_count(0)
 	, m_io_service(ios)
@@ -108,6 +115,7 @@ upnp::upnp(io_service& ios
 	, m_broadcast_timer(ios)
 	, m_refresh_timer(ios)
 	, m_map_timer(ios)
+	, m_ioc(ios)
 	, m_disabled(false)
 	, m_closing(false)
 	, m_ignore_non_routers(ignore_nonrouters)
@@ -120,8 +128,7 @@ void upnp::start()
 	TORRENT_ASSERT(is_single_thread());
 
 	error_code ec;
-	m_socket.open(std::bind(&upnp::on_reply, self(), _1, _2)
-		, m_refresh_timer.get_io_service(), ec);
+	m_socket.open(std::bind(&upnp::on_reply, self(), _1, _2), m_ioc, ec);
 
 	m_mappings.reserve(10);
 }
@@ -192,7 +199,7 @@ void upnp::discover_device_impl()
 
 	ADD_OUTSTANDING_ASYNC("upnp::resend_request");
 	++m_retry_count;
-	m_broadcast_timer.expires_from_now(seconds(2 * m_retry_count), ec);
+	m_broadcast_timer.expires_after(seconds(2 * m_retry_count));
 	m_broadcast_timer.async_wait(std::bind(&upnp::resend_request
 		, self(), _1));
 
@@ -245,7 +252,7 @@ port_mapping_t upnp::add_mapping(portmap_protocol const p, int const external_po
 
 	for (auto const& dev : m_devices)
 	{
-		rootdevice& d = const_cast<rootdevice&>(dev);
+		auto& d = const_cast<rootdevice&>(dev);
 		TORRENT_ASSERT(d.magic == 1337);
 
 		if (d.mapping.end_index() <= mapping_index)
@@ -284,7 +291,7 @@ void upnp::delete_mapping(port_mapping_t const mapping)
 
 	for (auto const& dev : m_devices)
 	{
-		rootdevice& d = const_cast<rootdevice&>(dev);
+		auto& d = const_cast<rootdevice&>(dev);
 		TORRENT_ASSERT(d.magic == 1337);
 
 		TORRENT_ASSERT(mapping < d.mapping.end_index());
@@ -638,10 +645,10 @@ void upnp::on_reply(udp::endpoint const& from, span<char const> buffer)
 	if (m_ignore_non_routers)
 	{
 		ADD_OUTSTANDING_ASYNC("upnp::map_timer");
-		// check back in in a little bit to see if we have seen any
+		// check back in a little bit to see if we have seen any
 		// devices at one of our default routes. If not, we want to override
 		// ignoring them and use them instead (better than not working).
-		m_map_timer.expires_from_now(seconds(1), ec);
+		m_map_timer.expires_after(seconds(1));
 		m_map_timer.async_wait(std::bind(&upnp::map_timer, self(), _1));
 	}
 }
@@ -705,7 +712,7 @@ void upnp::post(upnp::rootdevice const& d, char const* soap
 
 	char header[2048];
 	std::snprintf(header, sizeof(header), "POST %s HTTP/1.1\r\n"
-		"Host: %s:%u\r\n"
+		"Host: %s:%d\r\n"
 		"Content-Type: text/xml; charset=\"utf-8\"\r\n"
 		"Content-Length: %d\r\n"
 		"Soapaction: \"%s#%s\"\r\n\r\n"
@@ -754,7 +761,7 @@ void upnp::create_port_mapping(http_connection& c, rootdevice& d
 		"<NewInternalClient>%s</NewInternalClient>"
 		"<NewEnabled>1</NewEnabled>"
 		"<NewPortMappingDescription>%s</NewPortMappingDescription>"
-		"<NewLeaseDuration>%u</NewLeaseDuration>"
+		"<NewLeaseDuration>%d</NewLeaseDuration>"
 		"</u:%s></s:Body></s:Envelope>"
 		, soap_action, d.service_namespace.c_str(), d.mapping[i].external_port
 		, to_string(d.mapping[i].protocol)
@@ -1108,10 +1115,9 @@ void upnp::disable(error_code const& ec)
 	// might be outstanding requests relying on
 	// the device entry being present when they
 	// complete
-	error_code e;
-	m_broadcast_timer.cancel(e);
-	m_refresh_timer.cancel(e);
-	m_map_timer.cancel(e);
+	m_broadcast_timer.cancel();
+	m_refresh_timer.cancel();
+	m_map_timer.cancel();
 	m_socket.close();
 }
 
@@ -1173,7 +1179,7 @@ namespace {
 
 }
 
-struct upnp_error_category : boost::system::error_category
+struct upnp_error_category final : boost::system::error_category
 {
 	const char* name() const BOOST_SYSTEM_NOEXCEPT override
 	{
@@ -1284,7 +1290,7 @@ void upnp::on_upnp_get_ip_address_response(error_code const& e
 #ifndef TORRENT_DISABLE_LOGGING
 	if (s.error_code != -1)
 	{
-		log("error while getting external IP address, code: %u", s.error_code);
+		log("error while getting external IP address, code: %d", s.error_code);
 	}
 #endif
 
@@ -1386,8 +1392,7 @@ void upnp::on_upnp_map_response(error_code const& e
 	if (s.error_code != -1)
 	{
 #ifndef TORRENT_DISABLE_LOGGING
-		log("error while adding port map, code: %u"
-			, s.error_code);
+		log("error while adding port map, code: %d", s.error_code);
 #endif
 	}
 
@@ -1438,13 +1443,12 @@ void upnp::on_upnp_map_response(error_code const& e
 		{
 			m.expires = aux::time_now()
 				+ seconds(int(d.lease_duration * 0.75f));
-			time_point next_expire = m_refresh_timer.expires_at();
+			time_point next_expire = m_refresh_timer.expiry();
 			if (next_expire < aux::time_now()
 				|| next_expire > m.expires)
 			{
 				ADD_OUTSTANDING_ASYNC("upnp::on_expire");
-				error_code ec;
-				m_refresh_timer.expires_at(m.expires, ec);
+				m_refresh_timer.expires_at(m.expires);
 				m_refresh_timer.async_wait(std::bind(&upnp::on_expire, self(), _1));
 			}
 		}
@@ -1573,7 +1577,7 @@ void upnp::on_expire(error_code const& ec)
 
 	for (auto& dev : m_devices)
 	{
-		rootdevice& d = const_cast<rootdevice&>(dev);
+		auto& d = const_cast<rootdevice&>(dev);
 		TORRENT_ASSERT(d.magic == 1337);
 		for (port_mapping_t m{0}; m < m_mappings.end_index(); ++m)
 		{
@@ -1594,8 +1598,7 @@ void upnp::on_expire(error_code const& ec)
 	if (next_expire != max_time())
 	{
 		ADD_OUTSTANDING_ASYNC("upnp::on_expire");
-		error_code e;
-		m_refresh_timer.expires_at(next_expire, e);
+		m_refresh_timer.expires_at(next_expire);
 		m_refresh_timer.async_wait(std::bind(&upnp::on_expire, self(), _1));
 	}
 }
@@ -1604,16 +1607,15 @@ void upnp::close()
 {
 	TORRENT_ASSERT(is_single_thread());
 
-	error_code ec;
-	m_refresh_timer.cancel(ec);
-	m_broadcast_timer.cancel(ec);
-	m_map_timer.cancel(ec);
+	m_refresh_timer.cancel();
+	m_broadcast_timer.cancel();
+	m_map_timer.cancel();
 	m_closing = true;
 	m_socket.close();
 
 	for (auto& dev : m_devices)
 	{
-		rootdevice& d = const_cast<rootdevice&>(dev);
+		auto& d = const_cast<rootdevice&>(dev);
 		TORRENT_ASSERT(d.magic == 1337);
 		if (d.control_url.empty()) continue;
 		for (auto& m : d.mapping)

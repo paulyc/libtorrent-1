@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2019, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,7 +36,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #define TORRENT_UDP_SOCKET_HPP_INCLUDED
 
 #include "libtorrent/socket.hpp"
-#include "libtorrent/io_service.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/aux_/proxy_settings.hpp"
 #include "libtorrent/debug.hpp"
@@ -53,7 +55,11 @@ namespace libtorrent {
 	class TORRENT_EXTRA_EXPORT udp_socket : single_threaded
 	{
 	public:
-		explicit udp_socket(io_service& ios);
+		explicit udp_socket(io_context& ios);
+
+		// non-copyable
+		udp_socket(udp_socket const&) = delete;
+		udp_socket& operator=(udp_socket const&) = delete;
 
 		static constexpr udp_send_flags_t peer_connection = 0_bit;
 		static constexpr udp_send_flags_t tracker_connection = 1_bit;
@@ -61,18 +67,18 @@ namespace libtorrent {
 		static constexpr udp_send_flags_t dont_fragment = 3_bit;
 
 		bool is_open() const { return m_abort == false; }
-		io_service& get_io_service() { return m_socket.get_io_service(); }
+		udp::socket::executor_type get_executor() { return m_socket.get_executor(); }
 
 		template <typename Handler>
 		void async_read(Handler&& h)
 		{
-			m_socket.async_receive(null_buffers(), std::forward<Handler>(h));
+			m_socket.async_wait(udp::socket::wait_read, std::forward<Handler>(h));
 		}
 
 		template <typename Handler>
 		void async_write(Handler&& h)
 		{
-			m_socket.async_send(null_buffers(), std::forward<Handler>(h));
+			m_socket.async_wait(udp::socket::wait_write, std::forward<Handler>(h));
 		}
 
 		struct packet
@@ -132,15 +138,13 @@ namespace libtorrent {
 
 	private:
 
-		// non-copyable
-		udp_socket(udp_socket const&);
-		udp_socket& operator=(udp_socket const&);
-
 		void wrap(udp::endpoint const& ep, span<char const> p, error_code& ec, udp_send_flags_t flags);
 		void wrap(char const* hostname, int port, span<char const> p, error_code& ec, udp_send_flags_t flags);
 		bool unwrap(udp::endpoint& from, span<char>& buf);
 
 		udp::socket m_socket;
+
+		io_context& m_ioc;
 
 		using receive_buffer = std::array<char, 1500>;
 		std::unique_ptr<receive_buffer> m_buf;
@@ -152,11 +156,6 @@ namespace libtorrent {
 		std::shared_ptr<socks5> m_socks5_connection;
 
 		bool m_abort:1;
-
-#if TORRENT_USE_ASSERTS
-		bool m_started;
-		int m_magic;
-#endif
 	};
 }
 

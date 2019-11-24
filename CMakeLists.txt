@@ -29,12 +29,9 @@ set(libtorrent_include_files
 	bdecode
 	bencode
 	bitfield
-	block_cache
 	bloom_filter
 	broadcast_socket
 	bt_peer_connection
-	buffer
-	chained_buffer
 	choker
 	close_reason
 	config
@@ -53,22 +50,19 @@ set(libtorrent_include_files
 	disk_job_pool
 	disk_observer
 	download_priority
-	ed25519
 	entry
 	enum_net
 	error
 	error_code
 	extensions
 	file
-	file_pool
 	file_storage
 	fingerprint
 	flags
 	fwd
 	gzip
+	hash_picker
 	hasher
-	hasher512
-	heterogeneous_queue
 	hex
 	http_connection
 	http_parser
@@ -81,20 +75,16 @@ set(libtorrent_include_files
 	invariant_check
 	io
 	io_service
-	io_service_fwd
 	ip_filter
 	ip_voter
 	lazy_entry
 	link
-	linked_list
 	lsd
 	magnet_uri
 	natpmp
 	netlink
 	operations
 	optional
-	packet_buffer
-	packet_pool
 	parse_url
 	part_file
 	pe_crypto
@@ -120,7 +110,6 @@ set(libtorrent_include_files
 	puff
 	random
 	read_resume_data
-	receive_buffer
 	request_blocks
 	resolve_links
 	resolver
@@ -134,10 +123,11 @@ set(libtorrent_include_files
 	settings_pack
 	sha1
 	sha1_hash
-	sha512
+	sha256
 	sliding_average
 	socket
 	socket_io
+	socket_type
 	socks5_stream
 	span
 	ssl_stream
@@ -150,7 +140,6 @@ set(libtorrent_include_files
 	string_view
 	tailqueue
 	time
-	timestamp_history
 	torrent
 	torrent_flags
 	torrent_handle
@@ -165,8 +154,6 @@ set(libtorrent_include_files
 	units
 	upnp
 	utf8
-	utp_socket_manager
-	utp_stream
 	vector_utils
 	version
 	web_connection_base
@@ -214,8 +201,9 @@ set(libtorrent_aux_include_files
 	allocating_handler
 	array
 	bind_to_device
-	block_cache_reference
+	buffer
 	byteswap
+	chained_buffer
 	cppint_import_export
 	cpuid
 	deferred_handler
@@ -224,25 +212,31 @@ set(libtorrent_aux_include_files
 	disable_warnings_pop
 	disable_warnings_push
 	disk_job_fence
+	ed25519
 	escape_string
 	export
 	ffs
 	file_progress
+	file_view_pool
 	has_block
+	heterogeneous_queue
 	instantiate_connection
 	io
 	ip_notifier
 	listen_socket_handle
 	lsd
-	max_path
 	merkle
 	noexcept_movable
 	numeric_cast
 	openssl
+	packet_buffer
+	packet_pool
 	path
+	polymorphic_socket
 	portmap
 	proxy_settings
 	range
+	receive_buffer
 	route
 	scope_end
 	session_call
@@ -252,17 +246,29 @@ set(libtorrent_aux_include_files
 	session_udp_sockets
 	set_socket_buffer
 	socket_type
-	storage_piece_set
 	storage_utils
 	string_ptr
+	strview_less
 	suggest_piece
 	throw
 	time
+	timestamp_history
 	torrent_impl
+	torrent_list
 	unique_ptr
+	utp_socket_manager
+	utp_stream
 	vector
 	win_crypto_provider
 	win_util)
+
+set(try_signal_include_files
+	try_signal
+	signal_error_code
+	try_signal_mingw
+	try_signal_msvc
+	try_signal_posix
+)
 
 set(sources
 	web_connection_base
@@ -275,7 +281,6 @@ set(sources
 	bandwidth_queue_entry
 	bdecode
 	bitfield
-	block_cache
 	bloom_filter
 	chained_buffer
 	choker
@@ -286,6 +291,7 @@ set(sources
 	disk_buffer_holder
 	entry
 	error_code
+	file_view_pool
 	file_storage
 	file_progress
 	generate_peer_id
@@ -297,9 +303,11 @@ set(sources
 	fingerprint
 	gzip
 	hasher
+	sha1
+	sha256
+	hash_picker
 	hex
 	http_connection
-	http_stream
 	http_parser
 	i2p_stream
 	identify_client
@@ -348,7 +356,6 @@ set(sources
 	stat
 	stat_cache
 	storage
-	storage_piece_set
 	storage_utils
 	time
 	timestamp_history
@@ -366,14 +373,15 @@ set(sources
 	upnp
 	utp_socket_manager
 	utp_stream
-	file_pool
 	lsd
 	disk_io_job
 	disk_job_fence
 	disk_job_pool
 	disk_buffer_pool
+	disk_interface
 	disk_io_thread
 	disk_io_thread_pool
+	disabled_disk_io
 	enum_net
 	broadcast_socket
 	magnet_uri
@@ -385,6 +393,9 @@ set(sources
 	add_torrent_params
 	peer_info
 	stack_allocator
+	mmap
+	posix_disk_io
+	posix_storage
 
 # -- extensions --
 	ut_pex
@@ -426,15 +437,23 @@ set(ed25519_sources
 	sc
 	sign
 	verify
+	sha512
+	hasher512
+)
+
+set(try_signal_sources
+	try_signal
+	signal_error_code
 )
 
 list(TRANSFORM sources PREPEND "src/")
 list(TRANSFORM kademlia_sources PREPEND "src/kademlia/")
-list(TRANSFORM ed25519_sources PREPEND "ed25519/src/")
+list(TRANSFORM ed25519_sources PREPEND "src/ed25519/")
 list(TRANSFORM libtorrent_include_files PREPEND "include/libtorrent/")
 list(TRANSFORM libtorrent_extensions_include_files PREPEND "include/libtorrent/extensions/")
 list(TRANSFORM libtorrent_aux_include_files PREPEND "include/libtorrent/aux_/")
 list(TRANSFORM libtorrent_kademlia_include_files PREPEND "include/libtorrent/kademlia/")
+list(TRANSFORM try_signal_sources PREPEND "deps/try_signal/")
 
 # these options control target creation and thus have to be declared before the add_library() call
 feature_option(BUILD_SHARED_LIBS "build libtorrent as a shared library" ON)
@@ -450,7 +469,9 @@ if(CMAKE_CXX_COMPILER_ID MATCHES Clang)
 		-Wno-padded
 		-Wno-global-constructors
 		-Wno-exit-time-destructors
-		-Wno-weak-vtables)
+		-Wno-weak-vtables
+		-Wno-return-std-move-in-c++11
+		-Wno-unknown-warning-option)
 elseif(CMAKE_CXX_COMPILER_ID MATCHES GNU)
 	add_compile_options(
 		-Wall
@@ -460,6 +481,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES GNU)
 		-Wvla
 		-Wc++11-compat
 		-Wno-format-zero-length
+		-Wno-noexcept-type
 		-ftemplate-depth=512)
 elseif(MSVC)
 	add_compile_options(
@@ -495,12 +517,13 @@ endif()
 
 add_library(torrent-rasterbar
 	${sources}
+	${try_signal_sources}
 	${libtorrent_include_files}
 	${libtorrent_extensions_include_files}
 	${libtorrent_aux_include_files}
 )
 
-select_cxx_standard(torrent-rasterbar 11)
+select_cxx_standard(torrent-rasterbar 14)
 
 if (BUILD_SHARED_LIBS)
 	target_compile_definitions(torrent-rasterbar
@@ -520,16 +543,18 @@ set_target_properties(torrent-rasterbar
 target_include_directories(torrent-rasterbar PUBLIC
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 	$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+	PRIVATE deps/try_signal
 )
 
 target_compile_definitions(torrent-rasterbar
 	PUBLIC
 		$<$<CONFIG:Debug>:TORRENT_USE_ASSERTS>
+		BOOST_ASIO_ENABLE_CANCELIO
+		BOOST_ASIO_NO_DEPRECATED
 	PRIVATE
 		TORRENT_BUILDING_LIBRARY
 		_FILE_OFFSET_BITS=64
 		BOOST_EXCEPTION_DISABLE
-		BOOST_ASIO_ENABLE_CANCELIO
 		BOOST_ASIO_HAS_STD_CHRONO
 )
 
@@ -542,7 +567,7 @@ target_link_libraries(torrent-rasterbar
 if (WIN32)
 	target_link_libraries(torrent-rasterbar
 		PRIVATE
-			wsock32 ws2_32 Iphlpapi
+			bcrypt wsock32 ws2_32 Iphlpapi
 			debug dbghelp
 	)
 
@@ -648,10 +673,6 @@ else(OPENSSL_FOUND)
 	if (LibGcrypt_FOUND)
 		target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_USE_LIBGCRYPT)
 		target_link_libraries(torrent-rasterbar PRIVATE LibGcrypt::LibGcrypt)
-	else()
-		if (NOT WIN32 AND NOT APPLE)
-			target_sources(torrent-rasterbar PRIVATE src/sha1)
-		endif()
 	endif()
 endif(OPENSSL_FOUND)
 
@@ -666,13 +687,8 @@ if (dht)
 		${kademlia_sources}
 		${ed25519_sources}
 		${libtorrent_kademlia_include_files}
-		src/hasher512
 	)
 	target_include_directories(torrent-rasterbar PRIVATE ed25519/src)
-
-	if (NOT OpenSSL_FOUND AND NOT LibGcrypt_FOUND AND NOT WIN32 AND NOT APPLE)
-		target_sources(torrent-rasterbar PRIVATE src/sha512)
-	endif()
 else()
 	target_compile_definitions(torrent-rasterbar PUBLIC TORRENT_DISABLE_DHT)
 endif()
@@ -740,7 +756,11 @@ if(developer-options)
 		ENABLED TORRENT_PROFILE_CALLS=1)
 endif()
 
-generate_and_install_pkg_config_file(torrent-rasterbar libtorrent-rasterbar)
+# There is little to none support for using pkg-config with MSVC and most users won't bother with it.
+# However, msys is a linux-like platform on Windows that do support/prefer using pkg-config.
+if (NOT MSVC)
+	generate_and_install_pkg_config_file(torrent-rasterbar libtorrent-rasterbar)
+endif()
 
 include(CheckCXXCompilerFlag)
 

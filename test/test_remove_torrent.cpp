@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2017-2019, Arvid Norberg
+Copyright (c) 2018, d-komarov
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -64,9 +67,6 @@ void test_remove_torrent(remove_flags_t const remove_options
 	std::vector<session_proxy> sp;
 	settings_pack pack = settings();
 
-	// we do this to force pieces to be evicted into the ghost lists
-	pack.set_int(settings_pack::cache_size, 10);
-
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:48075");
 	lt::session ses1(pack);
 
@@ -84,7 +84,7 @@ void test_remove_torrent(remove_flags_t const remove_options
 	create_directory("tmp1_remove", ec);
 	std::ofstream file("tmp1_remove/temporary");
 	std::shared_ptr<torrent_info> t = ::create_torrent(&file, "temporary"
-		, 16 * 1024, num_pieces, false);
+		, 8 * 1024, num_pieces, false, create_torrent::v1_only);
 	file.close();
 
 	wait_for_listen(ses1, "ses1");
@@ -92,7 +92,8 @@ void test_remove_torrent(remove_flags_t const remove_options
 
 	// test using piece sizes smaller than 16kB
 	std::tie(tor1, tor2, ignore) = setup_transfer(&ses1, &ses2, nullptr
-		, true, false, true, "_remove", 8 * 1024, &t, false, nullptr);
+		, true, false, true, "_remove", 8 * 1024, &t, false, nullptr, true, false, nullptr
+		, create_torrent::v1_only);
 
 	if (test == partial_download)
 	{

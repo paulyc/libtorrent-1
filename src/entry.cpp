@@ -1,6 +1,10 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2008, 2010-2011, 2014-2019, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2017, Andrei Kurushin
+Copyright (c) 2019, Amir Abrams
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -43,7 +47,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-namespace detail {
+namespace aux {
 
 	string_view integer_to_str(span<char> buf
 		, entry::integer_type val)
@@ -66,11 +70,11 @@ namespace detail {
 		++ptr;
 		return {ptr, static_cast<std::size_t>(&buf.back() - ptr)};
 	}
-} // detail
+} // aux
 
 namespace {
 
-	inline void TORRENT_NO_RETURN throw_error()
+	[[noreturn]] inline void throw_error()
 	{ aux::throw_ex<system_error>(errors::invalid_entry_type); }
 
 	template <class T>
@@ -83,7 +87,13 @@ namespace {
 
 	entry& entry::operator[](string_view key)
 	{
+		// at least GCC-5.4 for ARM (on travis) has a libstdc++ whose debug map$
+		// doesn't seem to support transparent comparators$
+#if ! defined _GLIBCXX_DEBUG
 		auto const i = dict().find(key);
+#else
+		auto const i = dict().find(std::string(key));
+#endif
 		if (i != dict().end()) return i->second;
 		auto const ret = dict().emplace(
 			std::piecewise_construct,
@@ -94,21 +104,35 @@ namespace {
 
 	const entry& entry::operator[](string_view key) const
 	{
+		// at least GCC-5.4 for ARM (on travis) has a libstdc++ whose debug map$
+		// doesn't seem to support transparent comparators$
+#if ! defined _GLIBCXX_DEBUG
 		auto const i = dict().find(key);
+#else
+		auto const i = dict().find(std::string(key));
+#endif
 		if (i == dict().end()) throw_error();
 		return i->second;
 	}
 
 	entry* entry::find_key(string_view key)
 	{
+#if ! defined _GLIBCXX_DEBUG
 		auto const i = dict().find(key);
+#else
+		auto const i = dict().find(std::string(key));
+#endif
 		if (i == dict().end()) return nullptr;
 		return &i->second;
 	}
 
 	entry const* entry::find_key(string_view key) const
 	{
+#if ! defined _GLIBCXX_DEBUG
 		auto const i = dict().find(key);
+#else
+		auto const i = dict().find(std::string(key));
+#endif
 		if (i == dict().end()) return nullptr;
 		return &i->second;
 	}
@@ -356,9 +380,10 @@ namespace {
 		m_type = preformatted_t;
 	}
 
-	// convert a bdecode_node into an old skool entry
+	// convert a bdecode_node into an old school entry
 	entry& entry::operator=(bdecode_node const& e) &
 	{
+		destruct();
 		switch (e.type())
 		{
 			case bdecode_node::string_t:
@@ -388,16 +413,16 @@ namespace {
 				break;
 			}
 			case bdecode_node::none_t:
-				destruct();
 				break;
 		}
 		return *this;
 	}
 
 #if TORRENT_ABI_VERSION == 1
-	// convert a lazy_entry into an old skool entry
+	// convert a lazy_entry into an old school entry
 	entry& entry::operator=(lazy_entry const& e) &
 	{
+		destruct();
 		switch (e.type())
 		{
 			case lazy_entry::string_t:
@@ -427,7 +452,6 @@ namespace {
 				break;
 			}
 			case lazy_entry::none_t:
-				destruct();
 				break;
 		}
 		return *this;

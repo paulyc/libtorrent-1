@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg & Daniel Wallin
+Copyright (c) 2006, Daniel Wallin
+Copyright (c) 2013-2019, Arvid Norberg
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2015, Steven Siloti
+Copyright (c) 2016-2017, Pavel Pimenov
+Copyright (c) 2016-2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -72,12 +77,12 @@ void get_peers_observer::reply(msg const& m)
 			log_peers(m, r, int((end - peers) / 6));
 #endif
 			while (end - peers >= 6)
-				peer_list.push_back(detail::read_v4_endpoint<tcp::endpoint>(peers));
+				peer_list.push_back(aux::read_v4_endpoint<tcp::endpoint>(peers));
 		}
 		else
 		{
 			// assume it's uTorrent/libtorrent format
-			peer_list = detail::read_endpoint_list<tcp::endpoint>(n);
+			peer_list = aux::read_endpoint_list<tcp::endpoint>(n);
 #ifndef TORRENT_DISABLE_LOGGING
 			log_peers(m, r, n.list_size());
 #endif
@@ -117,11 +122,11 @@ void get_peers::got_peers(std::vector<tcp::endpoint> const& peers)
 get_peers::get_peers(
 	node& dht_node
 	, node_id const& target
-	, data_callback const& dcallback
-	, nodes_callback const& ncallback
+	, data_callback dcallback
+	, nodes_callback ncallback
 	, bool noseeds)
-	: find_data(dht_node, target, ncallback)
-	, m_data_callback(dcallback)
+	: find_data(dht_node, target, std::move(ncallback))
+	, m_data_callback(std::move(dcallback))
 	, m_noseeds(noseeds)
 {
 }
@@ -157,16 +162,16 @@ observer_ptr get_peers::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 	if (o) o->m_in_constructor = false;
 #endif
-	return std::move(o);
+	return o;
 }
 
 obfuscated_get_peers::obfuscated_get_peers(
 	node& dht_node
-	, node_id const& info_hash
-	, data_callback const& dcallback
-	, nodes_callback const& ncallback
+	, node_id const& target
+	, data_callback dcallback
+	, nodes_callback ncallback
 	, bool noseeds)
-	: get_peers(dht_node, info_hash, dcallback, ncallback, noseeds)
+	: get_peers(dht_node, target, std::move(dcallback), std::move(ncallback), noseeds)
 	, m_obfuscated(true)
 {
 }
@@ -184,7 +189,7 @@ observer_ptr obfuscated_get_peers::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 		if (o) o->m_in_constructor = false;
 #endif
-		return std::move(o);
+		return o;
 	}
 	else
 	{
@@ -193,7 +198,7 @@ observer_ptr obfuscated_get_peers::new_observer(udp::endpoint const& ep
 #if TORRENT_USE_ASSERTS
 		if (o) o->m_in_constructor = false;
 #endif
-		return std::move(o);
+		return o;
 	}
 }
 

@@ -1,6 +1,10 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2010-2019, Arvid Norberg
+Copyright (c) 2015, Mike Tzou
+Copyright (c) 2016-2018, Steven Siloti
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016, 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -31,7 +35,7 @@ POSSIBILITY OF SUCH DAMAGE.
 */
 
 #include "libtorrent/peer_id.hpp"
-#include "libtorrent/io_service.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/socket.hpp"
 #include "libtorrent/address.hpp"
 #include "libtorrent/error_code.hpp"
@@ -40,8 +44,11 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/create_torrent.hpp"
 #include "libtorrent/hasher.hpp"
 #include "libtorrent/socket_io.hpp"
-#include "libtorrent/file_pool.hpp"
 #include "libtorrent/string_view.hpp"
+#include "libtorrent/session.hpp" // for default_disk_io_constructor
+#include "libtorrent/disk_interface.hpp"
+#include "libtorrent/performance_counters.hpp"
+#include "libtorrent/aux_/session_settings.hpp"
 #include <random>
 #include <cstring>
 #include <thread>
@@ -52,15 +59,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <chrono>
 
 #if BOOST_ASIO_DYN_LINK
-#if BOOST_VERSION >= 104500
 #include <boost/asio/impl/src.hpp>
-#elif BOOST_VERSION >= 104400
-#include <boost/asio/impl/src.cpp>
-#endif
 #endif
 
 using namespace lt;
-using namespace lt::detail; // for write_* and read_*
+using namespace lt::aux; // for write_* and read_*
+using lt::make_address_v4;
 
 using namespace std::placeholders;
 
@@ -144,7 +148,7 @@ std::mt19937 rng(dev());
 
 struct peer_conn
 {
-	peer_conn(io_service& ios, int num_pieces, int blocks_pp, tcp::endpoint const& ep
+	peer_conn(io_context& ios, int num_pieces, int blocks_pp, tcp::endpoint const& ep
 		, char const* ih, bool seed_, int churn_, bool corrupt_)
 		: s(ios)
 		, read_pos(0)
@@ -428,10 +432,10 @@ struct peer_conn
 		char ep_str[200];
 		address const& addr = s.local_endpoint(e).address();
 		if (addr.is_v6())
-			std::snprintf(ep_str, sizeof(ep_str), "[%s]:%d", addr.to_string(e).c_str()
+			std::snprintf(ep_str, sizeof(ep_str), "[%s]:%d", addr.to_string().c_str()
 				, s.local_endpoint(e).port());
 		else
-			std::snprintf(ep_str, sizeof(ep_str), "%s:%d", addr.to_string(e).c_str()
+			std::snprintf(ep_str, sizeof(ep_str), "%s:%d", addr.to_string().c_str()
 				, s.local_endpoint(e).port());
 		std::printf("%s ep: %s sent: %d received: %d duration: %d ms up: %.1fMB/s down: %.1fMB/s\n"
 			, tmp, ep_str, blocks_sent, blocks_received, time, up, down);
@@ -522,9 +526,9 @@ struct peer_conn
 					close("REQUEST packet has invalid size", error_code());
 					return;
 				}
-				piece_index_t const piece = piece_index_t(detail::read_int32(ptr));
-				int const start = detail::read_int32(ptr);
-				int const length = detail::read_int32(ptr);
+				piece_index_t const piece = piece_index_t(aux::read_int32(ptr));
+				int const start = aux::read_int32(ptr);
+				int const length = aux::read_int32(ptr);
 				write_piece(piece, start, length);
 			}
 			else if (msg == 3) // not-interested
@@ -551,7 +555,7 @@ struct peer_conn
 			}
 			else if (msg == 4) // have
 			{
-				piece_index_t const piece(detail::read_int32(ptr));
+				piece_index_t const piece(aux::read_int32(ptr));
 				if (pieces.empty()) pieces.push_back(piece);
 				else pieces.insert(pieces.begin() + (rand() % pieces.size()), piece);
 			}
@@ -584,8 +588,8 @@ struct peer_conn
 				}
 				++blocks_received;
 				--outstanding_requests;
-				piece_index_t const piece = piece_index_t(detail::read_int32(ptr));
-				int start = detail::read_int32(ptr);
+				piece_index_t const piece = piece_index_t(aux::read_int32(ptr));
+				int start = aux::read_int32(ptr);
 
 				if (churn && (blocks_received % churn) == 0) {
 					outstanding_requests = 0;
@@ -601,7 +605,7 @@ struct peer_conn
 			}
 			else if (msg == 13) // suggest
 			{
-				piece_index_t const piece(detail::read_int32(ptr));
+				piece_index_t const piece(aux::read_int32(ptr));
 				auto i = std::find(pieces.begin(), pieces.end(), piece);
 				if (i != pieces.end())
 				{
@@ -612,9 +616,9 @@ struct peer_conn
 			}
 			else if (msg == 16) // reject request
 			{
-				piece_index_t const piece(detail::read_int32(ptr));
-				int start = detail::read_int32(ptr);
-				int length = detail::read_int32(ptr);
+				piece_index_t const piece(aux::read_int32(ptr));
+				int start = aux::read_int32(ptr);
+				int length = aux::read_int32(ptr);
 
 				// put it back!
 				if (current_piece != piece)
@@ -646,7 +650,7 @@ struct peer_conn
 			}
 			else if (msg == 17) // allowed_fast
 			{
-				piece_index_t const piece = piece_index_t(detail::read_int32(ptr));
+				piece_index_t const piece = piece_index_t(aux::read_int32(ptr));
 				auto i = std::find(pieces.begin(), pieces.end(), piece);
 				if (i != pieces.end())
 				{
@@ -685,7 +689,7 @@ struct peer_conn
 			if (corruption_counter == 0)
 			{
 				corruption_counter = 1000;
-				memset(write_buffer, 0, 10);
+				std::memset(write_buffer, 0, 10);
 			}
 		}
 		char* ptr = write_buf_proto;
@@ -724,8 +728,6 @@ void print_usage()
 		"    options for this command:\n"
 		"    -s <size>          the size of the torrent in megabytes\n"
 		"    -n <num-files>     the number of files in the test torrent\n"
-		"    -a                 introduce a lot of pad-files\n"
-		"                       (pad files are not supported for gen-data or upload)\n"
 		"    -t <file>          the file to save the .torrent file to\n"
 		"    -T <name>          the name of the torrent (and directory\n"
 		"                       its files are saved in)\n\n"
@@ -782,7 +784,7 @@ void hasher_thread(lt::create_torrent* t, piece_index_t const start_piece
 
 // size is in megabytes
 void generate_torrent(std::vector<char>& buf, int num_pieces, int num_files
-	, char const* torrent_name, bool with_padding)
+	, char const* torrent_name)
 {
 	file_storage fs;
 	// 1 MiB piece size
@@ -802,7 +804,7 @@ void generate_torrent(std::vector<char>& buf, int num_pieces, int num_files
 		file_size += 200;
 	}
 
-	lt::create_torrent t(fs, piece_size, with_padding ? 100 : -1);
+	lt::create_torrent t(fs, piece_size);
 
 	num_pieces = t.num_pieces();
 
@@ -828,11 +830,51 @@ void generate_torrent(std::vector<char>& buf, int num_pieces, int num_files
 	bencode(out, t.generate());
 }
 
+void write_handler(file_storage const& fs
+	, disk_interface& disk, storage_holder& st
+	, piece_index_t& piece, int& offset
+	, lt::storage_error const& error)
+{
+	if (error)
+	{
+		std::fprintf(stderr, "storage error: %s\n", error.ec.message().c_str());
+		return;
+	}
+
+	if (piece >= fs.end_piece()) return;
+	offset += 0x4000;
+	if (offset >= fs.piece_size(piece))
+	{
+		offset = 0;
+		++piece;
+	}
+	if (piece >= fs.end_piece()) return;
+
+	if (static_cast<int>(piece) & 1)
+	{
+		std::fprintf(stderr, "\r%.1f %% "
+			, float(static_cast<int>(piece) * 100) / float(fs.num_pieces()));
+	}
+	std::uint32_t buffer[0x4000 / 4];
+	generate_block(buffer, piece, offset);
+
+	int const left_in_piece = fs.piece_size(piece) - offset;
+
+	disk.async_write(st, { piece, offset, std::min(left_in_piece, 0x4000)}
+		, reinterpret_cast<char const*>(buffer)
+		, std::shared_ptr<disk_observer>()
+		, [&](lt::storage_error const& error)
+		{ write_handler(fs, disk, st, piece, offset, error); });
+}
+
 void generate_data(char const* path, torrent_info const& ti)
 {
-	file_storage const& fs = ti.files();
+	io_context ios;
+	counters stats_counters;
+	settings_pack sett = default_settings();
+	std::unique_ptr<lt::disk_interface> disk = default_disk_io_constructor(ios, sett, stats_counters);
 
-	file_pool fp;
+	file_storage const& fs = ti.files();
 
 	aux::vector<download_priority_t, file_index_t> priorities;
 	sha1_hash info_hash;
@@ -845,39 +887,36 @@ void generate_data(char const* path, torrent_info const& ti)
 		info_hash
 	};
 
-	std::unique_ptr<storage_interface> st(default_storage_constructor(params, fp));
+	storage_holder st = disk->new_torrent(params, std::shared_ptr<void>());
 
+	piece_index_t piece(0);
+	int offset = 0;
+
+	std::uint32_t buffer[0x4000 / 4];
+	generate_block(buffer, piece, offset);
+
+	disk->async_write(st, { piece, offset, std::min(fs.piece_size(piece), 0x4000)}
+		, reinterpret_cast<char const*>(buffer)
+		, std::shared_ptr<disk_observer>()
+		, [&](lt::storage_error const& error)
+		{ write_handler(fs, *disk, st, piece, offset, error); });
+
+	// keep 10 writes in flight at all times
+	for (int i = 0; i < 10; ++i)
 	{
-		storage_error error;
-		st->initialize(error);
+		write_handler(fs, *disk, st, piece, offset, lt::storage_error());
 	}
 
-	std::uint32_t piece[0x4000 / 4];
-	for (piece_index_t i(0); i < piece_index_t(ti.num_pieces()); ++i)
-	{
-		for (int j = 0; j < ti.piece_size(i); j += 0x4000)
-		{
-			generate_block(piece, i, j);
-			int const left_in_piece = ti.piece_size(i) - j;
-			iovec_t const b = { reinterpret_cast<char*>(piece)
-				, std::min(left_in_piece, 0x4000)};
-			storage_error error;
-			st->writev(b, i, j, open_mode::write_only, error);
-			if (error)
-				std::fprintf(stderr, "storage error: %s\n", error.ec.message().c_str());
-		}
-		if (static_cast<int>(i) & 1)
-		{
-			std::fprintf(stderr, "\r%.1f %% ", float(static_cast<int>(i) * 100) / float(ti.num_pieces()));
-		}
-	}
+	ios.run();
 }
 
-void io_thread(io_service* ios)
+void io_thread(io_context* ios) try
 {
-	error_code ec;
-	ios->run(ec);
-	if (ec) std::fprintf(stderr, "ERROR: %s\n", ec.message().c_str());
+	ios->run();
+}
+catch (std::exception const& e)
+{
+	std::fprintf(stderr, "ERROR: %s\n", e.what());
 }
 
 int main(int argc, char* argv[])
@@ -894,7 +933,6 @@ int main(int argc, char* argv[])
 	char const* destination_ip = "127.0.0.1";
 	int destination_port = 6881;
 	int churn = 0;
-	bool gen_pad_files = false;
 
 	argv += 2;
 	argc -= 2;
@@ -915,7 +953,6 @@ int main(int argc, char* argv[])
 		switch (optname[1])
 		{
 			case 'C': test_corruption = true; continue;
-			case 'a': gen_pad_files = true; continue;
 		}
 
 		if (argc == 0)
@@ -950,7 +987,7 @@ int main(int argc, char* argv[])
 		name = name.substr(0, name.find_last_of('.'));
 		std::printf("generating torrent: %s\n", name.c_str());
 		generate_torrent(tmp, size ? size : 1024, num_files ? num_files : 1
-			, name.c_str(), gen_pad_files);
+			, name.c_str() );
 
 		FILE* output = stdout;
 		if ("-"_sv != torrent_file)
@@ -1013,7 +1050,7 @@ int main(int argc, char* argv[])
 					, torrent_name, std::strerror(errno));
 				return 1;
 			}
-			size_t ret = fwrite(&buf[0], 1, buf.size(), f);
+			size_t ret = fwrite(buf.data(), 1, buf.size(), f);
 			if (ret != buf.size())
 			{
 				std::fprintf(stderr, "write returned: %d (expected %d)\n", int(ret), int(buf.size()));
@@ -1044,7 +1081,7 @@ int main(int argc, char* argv[])
 	}
 
 	error_code ec;
-	address_v4 addr = address_v4::from_string(destination_ip, ec);
+	address_v4 addr = make_address_v4(destination_ip, ec);
 	if (ec)
 	{
 		std::fprintf(stderr, "ERROR RESOLVING %s: %s\n", destination_ip, ec.message().c_str());
@@ -1055,7 +1092,7 @@ int main(int argc, char* argv[])
 #if !defined __APPLE__
 	// apparently darwin doesn't seems to let you bind to
 	// loopback on any other IP than 127.0.0.1
-	std::uint32_t const ip = addr.to_ulong();
+	std::uint32_t const ip = addr.to_uint();
 	if ((ip & 0xff000000) == 0x7f000000)
 	{
 		local_bind = true;
@@ -1072,7 +1109,7 @@ int main(int argc, char* argv[])
 	std::vector<peer_conn*> conns;
 	conns.reserve(num_connections);
 	int const num_threads = 2;
-	io_service ios[num_threads];
+	io_context ios[num_threads];
 	for (int i = 0; i < num_connections; ++i)
 	{
 		bool corrupt = test_corruption && (i & 1) == 0;
@@ -1080,14 +1117,9 @@ int main(int argc, char* argv[])
 		if (test_mode == upload_test) seed = true;
 		else if (test_mode == dual_test) seed = (i & 1);
 		conns.push_back(new peer_conn(ios[i % num_threads], ti.num_pieces(), ti.piece_length() / 16 / 1024
-			, ep, (char const*)&ti.info_hash()[0], seed, churn, corrupt));
+			, ep, (char const*)ti.info_hash().v1.data(), seed, churn, corrupt));
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		ios[i % num_threads].poll_one(ec);
-		if (ec)
-		{
-			std::fprintf(stderr, "ERROR: %s\n", ec.message().c_str());
-			break;
-		}
+		ios[i % num_threads].poll_one();
 	}
 
 	std::thread t1(&io_thread, &ios[0]);
@@ -1101,10 +1133,8 @@ int main(int argc, char* argv[])
 	std::uint64_t total_sent = 0;
 	std::uint64_t total_received = 0;
 
-	for (std::vector<peer_conn*>::iterator i = conns.begin()
-		, end(conns.end()); i != end; ++i)
+	for (peer_conn* p : conns)
 	{
-		peer_conn* p = *i;
 		int time = int(total_milliseconds(p->end_time - p->start_time));
 		if (time == 0) time = 1;
 		total_sent += p->blocks_sent;

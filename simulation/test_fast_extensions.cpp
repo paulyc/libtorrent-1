@@ -54,7 +54,7 @@ void run_fake_peer_test(
 	sim::default_config cfg;
 	sim::simulation sim{cfg};
 
-	sim::asio::io_service ios(sim, lt::address_v4::from_string("50.0.0.1"));
+	sim::asio::io_context ios(sim, lt::make_address_v4("50.0.0.1"));
 	lt::session_proxy zombie;
 
 	// setup settings pack to use for the session (customization point)
@@ -116,7 +116,7 @@ TORRENT_TEST(allow_fast)
 			{
 				lt::torrent_handle h = at->handle;
 				p1.connect_to(ep("50.0.0.1", 6881)
-					, h.torrent_file()->info_hash());
+					, h.torrent_file()->info_hash().v1);
 				p1.send_bitfield(bitfield);
 				p1.send_interested();
 			}
@@ -179,7 +179,7 @@ TORRENT_TEST(allow_fast_stress)
 		{
 			lt::torrent_handle h = at->handle;
 			p1.connect_to(ep("50.0.0.1", 6881)
-				, h.torrent_file()->info_hash());
+				, h.torrent_file()->info_hash().v1);
 			p1.send_interested();
 		}
 		else if (auto l = lt::alert_cast<lt::peer_log_alert>(a))

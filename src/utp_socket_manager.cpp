@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2009-2018, Arvid Norberg
+Copyright (c) 2010-2019, Arvid Norberg
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017, Steven Siloti
+Copyright (c) 2017, Andrei Kurushin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -30,9 +33,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 */
 
-#include "libtorrent/utp_stream.hpp"
+#include "libtorrent/aux_/utp_stream.hpp"
 #include "libtorrent/udp_socket.hpp"
-#include "libtorrent/utp_socket_manager.hpp"
+#include "libtorrent/aux_/utp_socket_manager.hpp"
 #include "libtorrent/aux_/instantiate_connection.hpp"
 #include "libtorrent/socket_io.hpp"
 #include "libtorrent/socket.hpp" // for TORRENT_HAS_DONT_FRAGMENT
@@ -45,16 +48,17 @@ POSSIBILITY OF SUCH DAMAGE.
 // #define TORRENT_DEBUG_MTU 1135
 
 namespace libtorrent {
+namespace aux {
 
 	utp_socket_manager::utp_socket_manager(
-		send_fun_t const& send_fun
-		, incoming_utp_callback_t const& cb
-		, io_service& ios
+		send_fun_t send_fun
+		, incoming_utp_callback_t cb
+		, io_context& ios
 		, aux::session_settings const& sett
 		, counters& cnt
 		, void* ssl_context)
-		: m_send_fun(send_fun)
-		, m_cb(cb)
+		: m_send_fun(std::move(send_fun))
+		, m_cb(std::move(cb))
 		, m_sett(sett)
 		, m_counters(cnt)
 		, m_ios(ios)
@@ -167,7 +171,7 @@ namespace libtorrent {
 
 		// parse out connection ID and look for existing
 		// connections. If found, forward to the utp_stream.
-		std::uint16_t id = ph->connection_id;
+		std::uint16_t const id = ph->connection_id;
 
 		// first test to see if it's the same socket as last time
 		// in most cases it is
@@ -175,6 +179,12 @@ namespace libtorrent {
 			&& utp_match(m_last_socket, ep, id))
 		{
 			return utp_incoming_packet(m_last_socket, p, ep, receive_time);
+		}
+
+		if (m_deferred_ack)
+		{
+			utp_send_ack(m_deferred_ack);
+			m_deferred_ack = nullptr;
 		}
 
 		auto r = m_utp_sockets.equal_range(id);
@@ -200,25 +210,22 @@ namespace libtorrent {
 			if (int(m_utp_sockets.size()) > m_sett.get_int(settings_pack::connections_limit) * 2)
 				return false;
 
-//			UTP_LOGV("not found, new connection id:%d\n", m_new_connection);
-
-			std::shared_ptr<aux::socket_type> c(new (std::nothrow) aux::socket_type(m_ios));
-			if (!c) return false;
-
 			TORRENT_ASSERT(m_new_connection == -1);
 			// create the new socket with this ID
 			m_new_connection = id;
 
-			aux::instantiate_connection(m_ios, aux::proxy_settings(), *c
-				, m_ssl_context, this, true, false);
+//			UTP_LOGV("not found, new connection id:%d\n", m_new_connection);
+
+			// TODO: this should not be heap allocated, sockets should be movable
+			aux::socket_type c(aux::instantiate_connection(m_ios, aux::proxy_settings(), m_ssl_context, this, true, false));
 
 			utp_stream* str = nullptr;
 #ifdef TORRENT_USE_OPENSSL
-			if (is_ssl(*c))
-				str = &c->get<ssl_stream<utp_stream>>()->next_layer();
+			if (is_ssl(c))
+				str = &boost::get<ssl_stream<utp_stream>>(c).next_layer();
 			else
 #endif
-				str = c->get<utp_stream>();
+				str = boost::get<utp_stream>(&c);
 
 			TORRENT_ASSERT(str);
 			int link_mtu, utp_mtu;
@@ -227,7 +234,8 @@ namespace libtorrent {
 			utp_init_socket(str->get_impl(), std::move(socket));
 			bool ret = utp_incoming_packet(str->get_impl(), p, ep, receive_time);
 			if (!ret) return false;
-			m_cb(c);
+			m_last_socket = str->get_impl();
+			m_cb(std::move(c));
 			// the connection most likely changed its connection ID here
 			// we need to move it to the correct ID
 			return true;
@@ -262,16 +270,11 @@ namespace libtorrent {
 
 	void utp_socket_manager::socket_drained()
 	{
-		// flush all deferred acks
-
-		if (!m_deferred_acks.empty())
+		if (m_deferred_ack)
 		{
-			m_temp_sockets.clear();
-			m_deferred_acks.swap(m_temp_sockets);
-			for (auto const &s : m_temp_sockets)
-			{
-				utp_send_ack(s);
-			}
+			utp_socket_impl* s = m_deferred_ack;
+			m_deferred_ack = nullptr;
+			utp_send_ack(s);
 		}
 
 		if (!m_drained_event.empty())
@@ -287,9 +290,8 @@ namespace libtorrent {
 
 	void utp_socket_manager::defer_ack(utp_socket_impl* s)
 	{
-		TORRENT_ASSERT(std::find(m_deferred_acks.begin(), m_deferred_acks.end(), s)
-			== m_deferred_acks.end());
-		m_deferred_acks.push_back(s);
+		TORRENT_ASSERT(m_deferred_ack == nullptr || m_deferred_ack == s);
+		m_deferred_ack = s;
 	}
 
 	void utp_socket_manager::subscribe_drained(utp_socket_impl* s)
@@ -316,6 +318,7 @@ namespace libtorrent {
 		if (i == m_utp_sockets.end()) return;
 		delete_utp_impl(i->second);
 		if (m_last_socket == i->second) m_last_socket = nullptr;
+		if (m_deferred_ack == i->second) m_deferred_ack = nullptr;
 		m_utp_sockets.erase(i);
 	}
 
@@ -347,4 +350,5 @@ namespace libtorrent {
 		m_utp_sockets.emplace(recv_id, impl);
 		return impl;
 	}
+}
 }

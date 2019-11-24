@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2005-2018, Arvid Norberg
+Copyright (c) 2005-2007, 2009-2010, 2013, 2015-2017, 2019, Arvid Norberg
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017, Andrei Kurushin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -68,7 +70,7 @@ struct ip_range
 	}
 };
 
-namespace detail {
+namespace aux {
 
 	template<class Addr>
 	Addr zero()
@@ -310,8 +312,8 @@ struct TORRENT_EXPORT ip_filter
 
 private:
 
-	detail::filter_impl<address_v4::bytes_type> m_filter4;
-	detail::filter_impl<address_v6::bytes_type> m_filter6;
+	aux::filter_impl<address_v4::bytes_type> m_filter4;
+	aux::filter_impl<address_v6::bytes_type> m_filter6;
 };
 
 // the port filter maps non-overlapping port ranges to flags. This
@@ -342,7 +344,7 @@ public:
 
 private:
 
-	detail::filter_impl<std::uint16_t> m_filter;
+	aux::filter_impl<std::uint16_t> m_filter;
 
 };
 

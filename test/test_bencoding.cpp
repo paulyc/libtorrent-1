@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2005, 2008, 2010, 2013-2019, Arvid Norberg
+Copyright (c) 2018, Eugene Shalygin
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -142,7 +144,6 @@ TORRENT_TEST(implicit_construct)
 	TEST_EQUAL(e.list().back().type(), entry::list_t);
 }
 
-#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(print_dict_single_line)
 {
 	entry e;
@@ -226,7 +227,7 @@ TORRENT_TEST(print_deep_dict)
 
 TORRENT_TEST(integer_to_str)
 {
-	using lt::detail::integer_to_str;
+	using lt::aux::integer_to_str;
 
 	char buf[30];
 	TEST_CHECK(integer_to_str(buf, 0) == "0"_sv);
@@ -236,6 +237,7 @@ TORRENT_TEST(integer_to_str)
 	TEST_CHECK(integer_to_str(buf, -123456789012345678LL) == "-123456789012345678"_sv);
 }
 
+#if TORRENT_ABI_VERSION == 1
 TORRENT_TEST(lazy_entry)
 {
 	{

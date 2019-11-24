@@ -32,6 +32,7 @@ class test_create_torrent(unittest.TestCase):
 
     def test_from_torrent_info(self):
         ti = lt.torrent_info('unordered.torrent')
+        print(ti.ssl_cert())
         ct = lt.create_torrent(ti)
         entry = ct.generate()
         content = lt.bencode(entry).strip()
@@ -41,6 +42,19 @@ class test_create_torrent(unittest.TestCase):
             print(file_content)
             print(entry)
             self.assertEqual(content, file_content)
+
+    def test_from_scratch(self):
+        fs = lt.file_storage()
+        fs.add_file('test/file1', 1000)
+        fs.add_file('test/file2', 2000)
+        ct = lt.create_torrent(fs)
+        ct.add_url_seed('foo')
+        ct.add_http_seed('bar')
+        ct.add_tracker('bar')
+        ct.set_root_cert('1234567890')
+        ct.add_collection('1337')
+        entry = ct.generate()
+        print(entry)
 
 
 class test_session_stats(unittest.TestCase):
@@ -93,6 +107,9 @@ class test_torrent_handle(unittest.TestCase):
         self.h.connect_peer(('127.0.0.2', 6881), source=4)
         self.h.connect_peer(('127.0.0.3', 6881), flags=2)
         self.h.connect_peer(('127.0.0.4', 6881), flags=2, source=4)
+
+        torrent_files = self.h.torrent_file()
+        print(torrent_files.map_file(0, 0, 0).piece)
 
         print(self.h.queue_position())
 
@@ -155,7 +172,7 @@ class test_torrent_handle(unittest.TestCase):
         pickled_trackers = pickle.dumps(self.h.trackers())
         unpickled_trackers = pickle.loads(pickled_trackers)
         self.assertEqual(unpickled_trackers[0]['url'], 'udp://tracker1.com')
-        self.assertEqual(unpickled_trackers[0]['endpoints'][0]['last_error']['value'], 0)
+        self.assertEqual(unpickled_trackers[0]['endpoints'][0]['info_hashes'][0]['last_error']['value'], 0)
 
     def test_file_status(self):
         self.setup()
@@ -213,7 +230,7 @@ class test_torrent_handle(unittest.TestCase):
         tp = lt.read_resume_data(resume_data)
 
         self.assertEqual(tp.name, 'test')
-        self.assertEqual(tp.info_hash, lt.sha1_hash('abababababababababab'))
+        self.assertEqual(tp.info_hash.v1, lt.sha1_hash('abababababababababab'))
         self.assertEqual(tp.file_priorities, [0, 1, 1])
         self.assertEqual(tp.peers, [('1.1.1.1', 1), ('2.2.2.2', 2)])
 
@@ -235,11 +252,6 @@ class test_torrent_handle(unittest.TestCase):
         # this is just to make sure this function can be called like this
         # from python
         self.h.scrape_tracker()
-
-    def test_cache_info(self):
-        self.setup()
-        cs = self.ses.get_cache_info(self.h)
-        self.assertEqual(cs.pieces, [])
 
     def test_unknown_torrent_parameter(self):
         self.ses = lt.session(settings)
@@ -278,7 +290,8 @@ class test_torrent_handle(unittest.TestCase):
         # piece priorities weren't set explicitly, but they were updated by the
         # file priorities being set
         self.assertEqual(self.h.get_piece_priorities(), [1])
-        self.assertEqual(self.ti.merkle_tree(), [])
+        if HAVE_DEPRECATED_APIS:
+            self.assertEqual(self.ti.merkle_tree(), [])
         self.assertEqual(self.st.verified_pieces, [])
 
 
@@ -298,6 +311,12 @@ class test_torrent_info(unittest.TestCase):
         self.assertEqual(f.file_size(0), 1234)
         self.assertEqual(info.total_size(), 1234)
         self.assertEqual(info.creation_date(), 0)
+
+    def test_sha1_constructor(self):
+        if not HAVE_DEPRECATED_APIS:
+            return
+        info = lt.torrent_info(lt.sha1_hash('aaaaaaaaaaaaaaaaaaaa'))
+        self.assertEqual(info.info_hash().v1, lt.sha1_hash('aaaaaaaaaaaaaaaaaaaa'))
 
     def test_metadata(self):
         ti = lt.torrent_info('base.torrent')
@@ -449,10 +468,10 @@ class test_magnet_link(unittest.TestCase):
         ses = lt.session({})
         magnet = 'magnet:?xt=urn:btih:C6EIF4CCYDBTIJVG3APAGM7M4NDONCTI'
         p = lt.parse_magnet_uri(magnet)
-        self.assertEqual(str(p.info_hash), '178882f042c0c33426a6d81e0333ece346e68a68')
+        self.assertEqual(str(p.info_hash.v1), '178882f042c0c33426a6d81e0333ece346e68a68')
         p.save_path = '.'
         h = ses.add_torrent(p)
-        self.assertEqual(str(h.info_hash()), '178882f042c0c33426a6d81e0333ece346e68a68')
+        self.assertEqual(str(h.info_hash().v1), '178882f042c0c33426a6d81e0333ece346e68a68')
 
     def test_parse_magnet_uri_dict(self):
         ses = lt.session({})
@@ -461,7 +480,7 @@ class test_magnet_link(unittest.TestCase):
         self.assertEqual(binascii.hexlify(p['info_hash']), b'178882f042c0c33426a6d81e0333ece346e68a68')
         p['save_path'] = '.'
         h = ses.add_torrent(p)
-        self.assertEqual(str(h.info_hash()), '178882f042c0c33426a6d81e0333ece346e68a68')
+        self.assertEqual(str(h.info_hash().v1), '178882f042c0c33426a6d81e0333ece346e68a68')
 
 
 class test_peer_class(unittest.TestCase):
@@ -567,10 +586,14 @@ class test_session(unittest.TestCase):
         s = lt.session({'alert_mask': lt.alert.category_t.stats_notification, 'enable_dht': False})
         s.post_dht_stats()
         alerts = []
-        # first the stats headers log line. but not if logging is disabled
+        cnt = 0
         while len(alerts) == 0:
             s.wait_for_alert(1000)
             alerts = s.pop_alerts()
+            cnt += 1
+            if cnt > 60:
+                print('no dht_stats_alert in 1 minute!')
+                sys.exit(1)
         a = alerts.pop(0)
         self.assertTrue(isinstance(a, lt.dht_stats_alert))
         self.assertTrue(isinstance(a.active_requests, list))
@@ -710,6 +733,27 @@ class test_error_code(unittest.TestCase):
         self.assertEqual(lt.bdecode_category().name(), 'bdecode')
         self.assertEqual(lt.generic_category().name(), 'generic')
         self.assertEqual(lt.system_category().name(), 'system')
+
+
+class test_peer_info(unittest.TestCase):
+
+    def test_peer_info_members(self):
+
+        p = lt.peer_info()
+
+        print(p.client)
+        print(p.pieces)
+        print(p.pieces)
+        print(p.last_request)
+        print(p.last_active)
+        print(p.flags)
+        print(p.source)
+        print(p.pid)
+        print(p.downloading_piece_index)
+        print(p.ip)
+        print(p.local_endpoint)
+        print(p.read_state)
+        print(p.write_state)
 
 
 if __name__ == '__main__':

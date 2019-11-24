@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2019, Arvid Norberg
+Copyright (c) 2004, Magnus Jonsson
+Copyright (c) 2009, Daniel Wallin
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2016, 2018, Steven Siloti
+Copyright (c) 2016, Andrei Kurushin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -124,7 +129,7 @@ namespace libtorrent {
 		TORRENT_ASSERT(is_single_thread());
 		INVARIANT_CHECK;
 
-		for (iterator i = m_peers.begin(); i != m_peers.end();)
+		for (auto i = m_peers.begin(); i != m_peers.end();)
 		{
 			if ((filter.access((*i)->address()) & ip_filter::blocked) == 0)
 			{
@@ -185,7 +190,7 @@ namespace libtorrent {
 		TORRENT_ASSERT(is_single_thread());
 		INVARIANT_CHECK;
 
-		for (iterator i = m_peers.begin(); i != m_peers.end();)
+		for (auto i = m_peers.begin(); i != m_peers.end();)
 		{
 			if ((filter.access((*i)->port) & port_filter::blocked) == 0)
 			{
@@ -268,7 +273,7 @@ namespace libtorrent {
 
 		// if this peer is in the connect candidate
 		// cache, erase it from there as well
-		std::vector<torrent_peer*>::iterator ci = std::find(m_candidate_cache.begin(), m_candidate_cache.end(), *i);
+		auto const ci = std::find(m_candidate_cache.begin(), m_candidate_cache.end(), *i);
 		if (ci != m_candidate_cache.end()) m_candidate_cache.erase(ci);
 
 		m_peer_allocator.free_peer_entry(*i);
@@ -589,7 +594,7 @@ namespace libtorrent {
 			TORRENT_ASSERT(i->address() == c.remote().address());
 
 #ifndef TORRENT_DISABLE_LOGGING
-			if (c.should_log(peer_log_alert::info))
+			if (i->connection != nullptr && c.should_log(peer_log_alert::info))
 			{
 				c.peer_log(peer_log_alert::info, "DUPLICATE PEER", "this: \"%s\" that: \"%s\""
 					, print_address(c.remote().address()).c_str()
@@ -648,9 +653,10 @@ namespace libtorrent {
 
 					// decide which peer connection to disconnect
 					// if the ports are equal, pick on at random
-					bool const disconnect1 = ((our_port < other_port) && !outgoing1)
+					bool disconnect1 = ((our_port < other_port) && !outgoing1)
 						|| ((our_port > other_port) && outgoing1)
 						|| ((our_port == other_port) && random(1));
+					disconnect1 &= !i->connection->failed();
 
 #ifndef TORRENT_DISABLE_LOGGING
 					if (c.should_log(peer_log_alert::info))
@@ -708,9 +714,9 @@ namespace libtorrent {
 			if (p == nullptr) return false;
 
 			if (is_v6)
-				new (p) ipv6_peer(c.remote(), false, {});
+				p = new (p) ipv6_peer(c.remote(), false, {});
 			else
-				new (p) ipv4_peer(c.remote(), false, {});
+				p = new (p) ipv4_peer(c.remote(), false, {});
 
 			iter = m_peers.insert(iter, p);
 
@@ -896,6 +902,8 @@ namespace libtorrent {
 			p->supports_utp = true;
 		if (flags & pex_holepunch)
 			p->supports_holepunch = true;
+		if (flags & pex_lt_v2)
+			p->protocol_v2 = true;
 		if (is_connect_candidate(*p))
 			update_connect_candidates(1);
 
@@ -938,6 +946,8 @@ namespace libtorrent {
 			p->supports_utp = true;
 		if (flags & pex_holepunch)
 			p->supports_holepunch = true;
+		if (flags & pex_lt_v2)
+			p->protocol_v2 = true;
 
 		if (was_conn_cand != is_connect_candidate(*p))
 		{
@@ -965,7 +975,7 @@ namespace libtorrent {
 		TORRENT_ASSERT(is_single_thread());
 		INVARIANT_CHECK;
 
-		iterator iter = std::lower_bound(m_peers.begin(), m_peers.end()
+		auto iter = std::lower_bound(m_peers.begin(), m_peers.end()
 			, destination, peer_address_compare());
 
 		if (iter != m_peers.end() && (*iter)->dest() == destination)
@@ -979,7 +989,7 @@ namespace libtorrent {
 		torrent_peer* p = m_peer_allocator.allocate_peer_entry(
 			torrent_peer_allocator_interface::i2p_peer_type);
 		if (p == nullptr) return nullptr;
-		new (p) i2p_peer(destination, true, src);
+		p = new (p) i2p_peer(destination, true, src);
 
 		if (!insert_peer(p, iter, flags, state))
 		{
@@ -1041,9 +1051,9 @@ namespace libtorrent {
 			if (p == nullptr) return nullptr;
 
 			if (is_v6)
-				new (p) ipv6_peer(remote, true, src);
+				p = new (p) ipv6_peer(remote, true, src);
 			else
-				new (p) ipv4_peer(remote, true, src);
+				p = new (p) ipv4_peer(remote, true, src);
 
 			try
 			{
@@ -1210,7 +1220,7 @@ namespace libtorrent {
 
 		TORRENT_ASSERT(c);
 
-		iterator iter = std::lower_bound(m_peers.begin(), m_peers.end()
+		auto const iter = std::lower_bound(m_peers.begin(), m_peers.end()
 			, c->remote().address(), peer_address_compare());
 
 		if (iter != m_peers.end() && (*iter)->address() == c->remote().address())

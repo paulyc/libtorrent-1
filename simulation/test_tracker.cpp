@@ -76,7 +76,7 @@ void test_interval(int interval)
 
 	bool ran_to_completion = false;
 
-	sim::asio::io_service web_server(sim, address_v4::from_string("2.2.2.2"));
+	sim::asio::io_context web_server(sim, make_address_v4("2.2.2.2"));
 	// listen on port 8080
 	sim::http_server http(web_server, 8080);
 
@@ -135,10 +135,11 @@ void test_interval(int interval)
 
 	TEST_CHECK(ran_to_completion);
 	TEST_EQUAL(announce_alerts.size(), announces.size());
+	TEST_CHECK(announces.size() % 2 == 0);
 
 	lt::time_point last_announce = announces[0];
 	lt::time_point last_alert = announce_alerts[0];
-	for (int i = 1; i < int(announces.size()); ++i)
+	for (int i = 2; i < int(announces.size()); i += 2)
 	{
 		// make sure the interval is within 1 second of what it's supposed to be
 		// (this accounts for network latencies, and the second-granularity
@@ -157,7 +158,7 @@ TORRENT_TEST(event_completed)
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service web_server(sim, address_v4::from_string("2.2.2.2"));
+	sim::asio::io_context web_server(sim, make_address_v4("2.2.2.2"));
 	// listen on port 8080
 	sim::http_server http(web_server, 8080);
 
@@ -234,9 +235,11 @@ TORRENT_TEST(event_completed)
 		switch (i)
 		{
 			case 0:
+			case 1:
 				TEST_CHECK(has_start);
 				break;
-			case 1:
+			case 2:
+			case 3:
 			{
 				// the announce should have come approximately the same time we
 				// completed
@@ -245,7 +248,7 @@ TORRENT_TEST(event_completed)
 				break;
 			}
 			default:
-				if (i == int(announces.size()) - 1)
+				if (i >= int(announces.size()) - 2)
 				{
 					TEST_CHECK(has_stopped);
 				}
@@ -285,9 +288,9 @@ struct sim_config : sim::default_config
 	{
 		if (hostname == "tracker.com")
 		{
-			result.push_back(address_v4::from_string("10.0.0.2"));
+			result.push_back(make_address_v4("123.0.0.2"));
 			if (ipv6)
-				result.push_back(address_v6::from_string("ff::dead:beef"));
+				result.push_back(make_address_v6("ff::dead:beef"));
 			return duration_cast<chrono::high_resolution_clock::duration>(chrono::milliseconds(100));
 		}
 
@@ -299,7 +302,7 @@ struct sim_config : sim::default_config
 
 void on_alert_notify(lt::session* ses)
 {
-	ses->get_io_service().post([ses] {
+	post(ses->get_context(), [ses] {
 		std::vector<lt::alert*> alerts;
 		ses->pop_alerts(&alerts);
 
@@ -323,8 +326,8 @@ void test_ipv6_support(char const* listen_interfaces
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service web_server_v4(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service web_server_v6(sim, address_v6::from_string("ff::dead:beef"));
+	sim::asio::io_context web_server_v4(sim, make_address_v4("123.0.0.2"));
+	sim::asio::io_context web_server_v6(sim, make_address_v6("ff::dead:beef"));
 
 	// listen on port 8080
 	sim::http_server http_v4(web_server_v4, 8080);
@@ -370,26 +373,26 @@ void test_ipv6_support(char const* listen_interfaces
 		for (int i = 0; i < num_interfaces; i++)
 		{
 			char ep[30];
-			std::snprintf(ep, sizeof(ep), "10.0.0.%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			std::snprintf(ep, sizeof(ep), "123.0.0.%d", i + 1);
+			ips.push_back(make_address(ep));
 			std::snprintf(ep, sizeof(ep), "ffff::1337:%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			ips.push_back(make_address(ep));
 		}
 
-		asio::io_service ios(sim, ips);
+		asio::io_context ios(sim, ips);
 		lt::settings_pack sett = settings();
 		if (listen_interfaces)
 		{
 			sett.set_str(settings_pack::listen_interfaces, listen_interfaces);
 		}
-		std::unique_ptr<lt::session> ses(new lt::session(sett, ios));
+		auto ses = std::make_unique<lt::session>(sett, ios);
 
 		ses->set_alert_notify(std::bind(&on_alert_notify, ses.get()));
 
 		lt::add_torrent_params p;
 		p.name = "test-torrent";
 		p.save_path = ".";
-		p.info_hash.assign("abababababababababab");
+		p.info_hash.v1.assign("abababababababababab");
 
 //TODO: parameterize http vs. udp here
 		p.trackers.push_back("http://tracker.com:8080/announce");
@@ -428,8 +431,8 @@ void test_udpv6_support(char const* listen_interfaces
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service web_server_v4(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service web_server_v6(sim, address_v6::from_string("ff::dead:beef"));
+	sim::asio::io_context web_server_v4(sim, make_address_v4("123.0.0.2"));
+	sim::asio::io_context web_server_v6(sim, make_address_v6("ff::dead:beef"));
 
 	int v4_announces = 0;
 	int v6_announces = 0;
@@ -442,24 +445,24 @@ void test_udpv6_support(char const* listen_interfaces
 		for (int i = 0; i < num_interfaces; i++)
 		{
 			char ep[30];
-			std::snprintf(ep, sizeof(ep), "10.0.0.%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			std::snprintf(ep, sizeof(ep), "123.0.0.%d", i + 1);
+			ips.push_back(make_address(ep));
 			std::snprintf(ep, sizeof(ep), "ffff::1337:%d", i + 1);
-			ips.push_back(address::from_string(ep));
+			ips.push_back(make_address(ep));
 		}
 
-		asio::io_service ios(sim, ips);
+		asio::io_context ios(sim, ips);
 		lt::settings_pack sett = settings();
 		if (listen_interfaces)
 		{
 			sett.set_str(settings_pack::listen_interfaces, listen_interfaces);
 		}
-		std::unique_ptr<lt::session> ses(new lt::session(sett, ios));
+		auto ses = std::make_unique<lt::session>(sett, ios);
 
 		// since we don't have a udp tracker to run in the sim, looking for the
 		// alerts is the closest proxy
 		ses->set_alert_notify([&]{
-			ses->get_io_service().post([&] {
+			post(ses->get_context(), [&] {
 				std::vector<lt::alert*> alerts;
 				ses->pop_alerts(&alerts);
 
@@ -488,7 +491,7 @@ void test_udpv6_support(char const* listen_interfaces
 		lt::add_torrent_params p;
 		p.name = "test-torrent";
 		p.save_path = ".";
-		p.info_hash.assign("abababababababababab");
+		p.info_hash.v1.assign("abababababababababab");
 
 		p.trackers.push_back("udp://tracker.com:8080/announce");
 		ses->async_add_torrent(p);
@@ -555,7 +558,7 @@ TORRENT_TEST(ipv6_support_bind_v6_any)
 
 TORRENT_TEST(ipv6_support_bind_v4)
 {
-	test_ipv6_support("10.0.0.3:6881", 2, 0);
+	test_ipv6_support("123.0.0.3:6881", 2, 0);
 }
 
 TORRENT_TEST(ipv6_support_bind_v6)
@@ -570,12 +573,12 @@ TORRENT_TEST(ipv6_support_bind_v6_3interfaces)
 
 TORRENT_TEST(ipv6_support_bind_v4_v6)
 {
-	test_ipv6_support("10.0.0.3:6881,[ffff::1337:1]:6881", 2, 2);
+	test_ipv6_support("123.0.0.3:6881,[ffff::1337:1]:6881", 2, 2);
 }
 
 TORRENT_TEST(ipv6_support_bind_v6_v4)
 {
-	test_ipv6_support("[ffff::1337:1]:6881,10.0.0.3:6881", 2, 2);
+	test_ipv6_support("[ffff::1337:1]:6881,123.0.0.3:6881", 2, 2);
 }
 
 // this runs a simulation of a torrent with tracker(s), making sure the request
@@ -584,7 +587,7 @@ TORRENT_TEST(ipv6_support_bind_v6_v4)
 // trackers to the torrent. It's expected to return the number of seconds to
 // wait until test2 is called.
 // The Announce function is called on http requests. Test1 is run on the session
-// 5 seconds after startup. The tracker is running at 10.0.0.2 (or tracker.com)
+// 5 seconds after startup. The tracker is running at 123.0.0.2 (or tracker.com)
 // port 8080.
 template <typename Setup, typename Announce, typename Test1, typename Test2>
 void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
@@ -594,8 +597,8 @@ void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
 	sim_config network_cfg;
 	sim::simulation sim{network_cfg};
 
-	sim::asio::io_service tracker_ios(sim, address_v4::from_string("10.0.0.2"));
-	sim::asio::io_service tracker_ios6(sim, address_v6::from_string("ff::dead:beef"));
+	sim::asio::io_context tracker_ios(sim, make_address_v4("123.0.0.2"));
+	sim::asio::io_context tracker_ios6(sim, make_address_v6("ff::dead:beef"));
 
 	// listen on port 8080
 	sim::http_server http(tracker_ios, 8080);
@@ -606,17 +609,17 @@ void tracker_test(Setup setup, Announce a, Test1 test1, Test2 test2
 
 	lt::session_proxy zombie;
 
-	asio::io_service ios(sim, { address_v4::from_string("10.0.0.3")
-		, address_v6::from_string("ffff::1337") });
+	asio::io_context ios(sim, { make_address_v4("123.0.0.3")
+		, make_address_v6("ffff::1337") });
 	lt::settings_pack sett = settings();
-	std::unique_ptr<lt::session> ses(new lt::session(sett, ios));
+	auto ses = std::make_unique<lt::session>(sett, ios);
 
 	ses->set_alert_notify(std::bind(&on_alert_notify, ses.get()));
 
 	lt::add_torrent_params p;
 	p.name = "test-torrent";
 	p.save_path = ".";
-	p.info_hash.assign("abababababababababab");
+	p.info_hash.v1.assign("abababababababababab");
 	int const delay = setup(p, *ses);
 	ses->async_add_torrent(p);
 
@@ -693,10 +696,10 @@ TORRENT_TEST(test_error)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), false);
-				TEST_EQUAL(aep.message, "test");
-				TEST_EQUAL(aep.last_error, error_code(errors::tracker_failure));
-				TEST_EQUAL(aep.fails, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].is_working(), false);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "test");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code(errors::tracker_failure));
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 1);
 			}
 		});
 }
@@ -719,10 +722,10 @@ TORRENT_TEST(test_warning)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), true);
-				TEST_EQUAL(aep.message, "test2");
-				TEST_EQUAL(aep.last_error, error_code());
-				TEST_EQUAL(aep.fails, 0);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].is_working(), true);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "test2");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code());
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
 			}
 		});
 }
@@ -746,13 +749,13 @@ TORRENT_TEST(test_scrape_data_in_announce)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), true);
-				TEST_EQUAL(aep.message, "");
-				TEST_EQUAL(aep.last_error, error_code());
-				TEST_EQUAL(aep.fails, 0);
-				TEST_EQUAL(aep.scrape_complete, 1);
-				TEST_EQUAL(aep.scrape_incomplete, 2);
-				TEST_EQUAL(aep.scrape_downloaded, 3);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].is_working(), true);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code());
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_complete, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_incomplete, 2);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_downloaded, 3);
 			}
 		});
 }
@@ -783,9 +786,9 @@ TORRENT_TEST(test_scrape)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.scrape_incomplete, 2);
-				TEST_EQUAL(aep.scrape_complete, 1);
-				TEST_EQUAL(aep.scrape_downloaded, 3);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_incomplete, 2);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_complete, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].scrape_downloaded, 3);
 			}
 		}
 		, "/scrape");
@@ -806,10 +809,10 @@ TORRENT_TEST(test_http_status)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), false);
-				TEST_EQUAL(aep.message, "Not A Tracker");
-				TEST_EQUAL(aep.last_error, error_code(410, http_category()));
-				TEST_EQUAL(aep.fails, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].is_working(), false);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "Not A Tracker");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code(410, http_category()));
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 1);
 			}
 		});
 }
@@ -832,10 +835,10 @@ TORRENT_TEST(test_interval)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), true);
-				TEST_EQUAL(aep.message, "");
-				TEST_EQUAL(aep.last_error, error_code());
-				TEST_EQUAL(aep.fails, 0);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].is_working(), true);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code());
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
 			}
 
 			TEST_EQUAL(ae.trackerid, "testtest");
@@ -860,11 +863,11 @@ TORRENT_TEST(test_invalid_bencoding)
 			TEST_EQUAL(ae.endpoints.size(), 2);
 			for (auto const& aep : ae.endpoints)
 			{
-				TEST_EQUAL(aep.is_working(), false);
-				TEST_EQUAL(aep.message, "");
-				TEST_EQUAL(aep.last_error, error_code(bdecode_errors::expected_value
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].is_working(), false);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].message, "");
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error, error_code(bdecode_errors::expected_value
 					, bdecode_category()));
-				TEST_EQUAL(aep.fails, 1);
+				TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 1);
 			}
 		});
 }
@@ -913,7 +916,7 @@ TORRENT_TEST(try_next)
 				{
 					for (auto const& aep : tr[i].endpoints)
 					{
-						TEST_EQUAL(aep.fails, 0);
+						TEST_EQUAL(aep.info_hashes[protocol_version::V1].fails, 0);
 					}
 					TEST_EQUAL(tr[i].verified, true);
 				}
@@ -921,8 +924,8 @@ TORRENT_TEST(try_next)
 				{
 					for (auto const& aep : tr[i].endpoints)
 					{
-						TEST_CHECK(aep.fails >= 1);
-						TEST_EQUAL(aep.last_error
+						TEST_CHECK(aep.info_hashes[protocol_version::V1].fails >= 1);
+						TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error
 							, error_code(boost::asio::error::host_not_found));
 					}
 					TEST_EQUAL(tr[i].verified, false);
@@ -932,8 +935,8 @@ TORRENT_TEST(try_next)
 					TEST_EQUAL(tr[i].verified, false);
 					for (auto const& aep : tr[i].endpoints)
 					{
-						TEST_CHECK(aep.fails >= 1);
-						TEST_EQUAL(aep.last_error
+						TEST_CHECK(aep.info_hashes[protocol_version::V1].fails >= 1);
+						TEST_EQUAL(aep.info_hashes[protocol_version::V1].last_error
 							, error_code(boost::asio::error::host_not_found));
 					}
 				}
@@ -976,7 +979,7 @@ TORRENT_TEST(tracker_ipv6_argument)
 		{
 			settings_pack pack;
 			pack.set_bool(settings_pack::anonymous_mode, false);
-			pack.set_str(settings_pack::listen_interfaces, "10.0.0.3:0,[ffff::1337]:0");
+			pack.set_str(settings_pack::listen_interfaces, "123.0.0.3:0,[ffff::1337]:0");
 			ses.apply_settings(pack);
 			p.ti = make_torrent(true);
 			return 60;
@@ -1000,7 +1003,7 @@ TORRENT_TEST(tracker_ipv6_argument)
 				std::string::size_type const pos = req.find("&ipv4=");
 				TEST_CHECK(pos != std::string::npos || stop_event);
 				got_ipv4 |= pos != std::string::npos;
-				TEST_EQUAL(req.substr(pos + 6, req.substr(pos + 6).find_first_of('&')), "10.0.0.3");
+				TEST_EQUAL(req.substr(pos + 6, req.substr(pos + 6).find_first_of('&')), "123.0.0.3");
 			}
 			return sim::send_response(200, "OK", 11) + "d5:peers0:e";
 		}
@@ -1169,11 +1172,11 @@ TORRENT_TEST(tracker_tiers)
 	// setup the simulation
 	sim::default_config network_cfg;
 	sim::simulation sim{network_cfg};
-	sim::asio::io_service ios0 { sim, peer0 };
-	sim::asio::io_service ios1 { sim, peer1 };
+	sim::asio::io_context ios0 { sim, peer0 };
+	sim::asio::io_context ios1 { sim, peer1 };
 
-	sim::asio::io_service tracker1(sim, address_v4::from_string("3.0.0.1"));
-	sim::asio::io_service tracker2(sim, address_v4::from_string("3.0.0.2"));
+	sim::asio::io_context tracker1(sim, make_address_v4("3.0.0.1"));
+	sim::asio::io_context tracker2(sim, make_address_v4("3.0.0.2"));
 	sim::http_server http1(tracker1, 8080);
 	sim::http_server http2(tracker2, 8080);
 

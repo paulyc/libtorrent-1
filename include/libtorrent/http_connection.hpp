@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2019, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -78,13 +81,13 @@ using http_filter_handler = std::function<void(http_connection&, std::vector<tcp
 struct TORRENT_EXTRA_EXPORT http_connection
 	: std::enable_shared_from_this<http_connection>
 {
-	http_connection(io_service& ios
+	http_connection(io_context& ios
 		, resolver_interface& resolver
-		, http_handler const& handler
+		, http_handler handler
 		, bool bottled = true
 		, int max_bottled_buffer_size = default_max_bottled_buffer_size
-		, http_connect_handler const& ch = http_connect_handler()
-		, http_filter_handler const& fh = http_filter_handler()
+		, http_connect_handler ch = http_connect_handler()
+		, http_filter_handler fh = http_filter_handler()
 #ifdef TORRENT_USE_OPENSSL
 		, ssl::context* ssl_ctx = nullptr
 #endif
@@ -125,7 +128,7 @@ struct TORRENT_EXTRA_EXPORT http_connection
 
 	void close(bool force = false);
 
-	aux::socket_type const& socket() const { return m_sock; }
+	aux::socket_type const& socket() const { return *m_sock; }
 
 	std::vector<tcp::endpoint> const& endpoints() const { return m_endpoints; }
 
@@ -149,6 +152,7 @@ private:
 	void callback(error_code e, span<char> data = {});
 
 	aux::vector<char> m_recvbuffer;
+	io_context& m_ios;
 
 	std::string m_hostname;
 	std::string m_url;
@@ -160,7 +164,7 @@ private:
 	// endpoint with this index (in m_endpoints) next
 	int m_next_ep;
 
-	aux::socket_type m_sock;
+	boost::optional<aux::socket_type> m_sock;
 
 #ifdef TORRENT_USE_OPENSSL
 	ssl::context* m_ssl_ctx;

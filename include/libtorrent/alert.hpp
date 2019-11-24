@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg, Daniel Wallin
+Copyright (c) 2003, Daniel Wallin
+Copyright (c) 2004, Magnus Jonsson
+Copyright (c) 2004-2005, 2008-2009, 2013-2019, Arvid Norberg
+Copyright (c) 2015-2017, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -86,7 +89,8 @@ namespace libtorrent {
 #endif
 	public:
 
-		alert(alert const& rhs) = delete;
+		// hidden
+		TORRENT_UNEXPORT alert(alert const& rhs) = delete;
 		alert& operator=(alert const&) = delete;
 		alert(alert&& rhs) noexcept = default;
 
@@ -154,13 +158,6 @@ namespace libtorrent {
 		// the lasts stats alert.
 		static constexpr alert_category_t stats_notification = 11_bit;
 
-#if TORRENT_ABI_VERSION == 1
-		// Alerts on RSS related events, like feeds being updated, feed error
-		// conditions and successful RSS feed updates. Enabling this category
-		// will make you receive rss_alert alerts.
-		static constexpr alert_category_t TORRENT_DEPRECATED_MEMBER rss_notification = 12_bit;
-#endif
-
 		// Enables debug logging alerts. These are available unless libtorrent
 		// was built with logging disabled (``TORRENT_DISABLE_LOGGING``). The
 		// alerts being posted are log_alert and are session wide.
@@ -217,7 +214,7 @@ namespace libtorrent {
 		static constexpr alert_category_t all_categories = alert_category_t::all();
 
 		// hidden
-		alert();
+		TORRENT_UNEXPORT alert();
 		// hidden
 		virtual ~alert();
 
@@ -304,7 +301,7 @@ namespace libtorrent {
 template <class T> T* alert_cast(alert* a)
 {
 	static_assert(std::is_base_of<alert, T>::value
-		, "alert_cast<> can only be used with alert types (deriving from libtorrent::alert)");
+		, "alert_cast<> can only be used with alert types (deriving from lt::alert)");
 
 	if (a == nullptr) return nullptr;
 	if (a->type() == T::alert_type) return static_cast<T*>(a);
@@ -313,7 +310,7 @@ template <class T> T* alert_cast(alert* a)
 template <class T> T const* alert_cast(alert const* a)
 {
 	static_assert(std::is_base_of<alert, T>::value
-		, "alert_cast<> can only be used with alert types (deriving from libtorrent::alert)");
+		, "alert_cast<> can only be used with alert types (deriving from lt::alert)");
 	if (a == nullptr) return nullptr;
 	if (a->type() == T::alert_type) return static_cast<T const*>(a);
 	return nullptr;

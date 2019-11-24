@@ -1,6 +1,6 @@
 /*
 
-Copyright (c) 2017, Arvid Norberg
+Copyright (c) 2017-2019, Arvid Norberg
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_TORRENT_FLAGS_HPP
 #define TORRENT_TORRENT_FLAGS_HPP
 
+#include <cstdint>
+
 #include "libtorrent/config.hpp"
 #include "libtorrent/flags.hpp"
 
@@ -59,8 +61,8 @@ namespace torrent_flags {
 	// Setting ``seed_mode`` on a torrent without metadata (a
 	// .torrent file) is a no-op and will be ignored.
 	//
-	// If resume data is passed in with this torrent, the seed mode saved
-	// in there will override the seed mode you set here.
+	// It is not possible to *set* the `seed_mode` flag on a torrent after it has
+	// been added to as session. It is possible to *clear* it though.
 	constexpr torrent_flags_t seed_mode = 0_bit;
 
 	// If ``upload_mode`` is set, the torrent will be initialized in
@@ -123,11 +125,6 @@ namespace torrent_flags {
 	// the torrent should also be started as paused. The default queue
 	// order is the order the torrents were added. They are all downloaded
 	// in that order. For more details, see queuing_.
-	//
-	// If you pass in resume data, the auto_managed state of the torrent
-	// when the resume data was saved will override the auto_managed state
-	// you pass in here. You can override this by setting
-	// ``override_resume_data``.
 	constexpr torrent_flags_t auto_managed = 5_bit;
 	constexpr torrent_flags_t duplicate_is_error = 6_bit;
 
@@ -243,6 +240,18 @@ namespace torrent_flags {
 	// is passed in here as well as the .torrent file.
 	constexpr torrent_flags_t TORRENT_DEPRECATED_MEMBER merge_resume_http_seeds = 18_bit;
 #endif
+
+	// set this flag to disable DHT for this torrent. This lets you have the DHT
+	// enabled for the whole client, and still have specific torrents not
+	// participating in it. i.e. not announcing to the DHT nor picking up peers
+	// from it.
+	constexpr torrent_flags_t disable_dht = 19_bit;
+
+	// set this flag to disable local service discovery for this torrent.
+	constexpr torrent_flags_t disable_lsd = 20_bit;
+
+	// set this flag to disable peer exchange for this torrent.
+	constexpr torrent_flags_t disable_pex = 21_bit;
 
 	constexpr torrent_flags_t all = torrent_flags_t::all();
 

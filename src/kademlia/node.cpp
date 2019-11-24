@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg
+Copyright (c) 2006-2019, Arvid Norberg
+Copyright (c) 2014-2018, Steven Siloti
+Copyright (c) 2015-2018, Alden Torres
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016-2017, Pavel Pimenov
+Copyright (c) 2019, Amir Abrams
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -50,6 +55,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <libtorrent/assert.hpp>
 #include <libtorrent/aux_/time.hpp>
 #include "libtorrent/aux_/throw.hpp"
+#include "libtorrent/aux_/session_settings.hpp"
 #include "libtorrent/alert_types.hpp" // for dht_lookup
 #include "libtorrent/performance_counters.hpp" // for counters
 
@@ -57,6 +63,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/kademlia/dht_observer.hpp"
 #include "libtorrent/kademlia/direct_request.hpp"
 #include "libtorrent/kademlia/io.hpp"
+#include "libtorrent/kademlia/dht_settings.hpp"
 
 #include "libtorrent/kademlia/refresh.hpp"
 #include "libtorrent/kademlia/get_peers.hpp"
@@ -106,7 +113,7 @@ void incoming_error(entry& e, char const* msg, int error_code = 203)
 } // anonymous namespace
 
 node::node(aux::listen_socket_handle const& sock, socket_manager* sock_man
-	, dht_settings const& settings
+	, aux::session_settings const& settings
 	, node_id const& nid
 	, dht_observer* observer
 	, counters& cnt
@@ -131,6 +138,8 @@ node::node(aux::listen_socket_handle const& sock, socket_manager* sock_man
 }
 
 node::~node() = default;
+
+int node::branch_factor() const { return m_settings.get_int(settings_pack::dht_search_branching); }
 
 void node::update_node_id()
 {
@@ -173,9 +182,7 @@ bool node::verify_token(string_view token, sha1_hash const& info_hash
 	}
 
 	hasher h1;
-	error_code ec;
-	std::string const address = addr.address().to_string(ec);
-	if (ec) return false;
+	std::string const address = addr.address().to_string();
 	h1.update(address);
 	h1.update(reinterpret_cast<char const*>(&m_secret[0]), sizeof(m_secret[0]));
 	h1.update(info_hash);
@@ -198,9 +205,7 @@ std::string node::generate_token(udp::endpoint const& addr
 	std::string token;
 	token.resize(write_token_size);
 	hasher h;
-	error_code ec;
-	std::string const address = addr.address().to_string(ec);
-	TORRENT_ASSERT(!ec);
+	std::string const address = addr.address().to_string();
 	h.update(address);
 	h.update(reinterpret_cast<char*>(&m_secret[0]), sizeof(m_secret[0]));
 	h.update(info_hash);
@@ -259,7 +264,7 @@ void node::incoming(aux::listen_socket_handle const& s, msg const& m)
 {
 	// is this a reply?
 	bdecode_node const y_ent = m.message.dict_find_string("y");
-	if (!y_ent || y_ent.string_length() == 0)
+	if (!y_ent || y_ent.string_length() != 1)
 	{
 		// don't respond to this obviously broken messages. We don't
 		// want to open up a magnification opportunity
@@ -281,19 +286,19 @@ void node::incoming(aux::listen_socket_handle const& s, msg const& m)
 			ext_ip = r.dict_find_string("ip");
 	}
 
-	if (ext_ip && ext_ip.string_length() >= int(detail::address_size(udp::v6())))
+	if (ext_ip && ext_ip.string_length() >= int(aux::address_size(udp::v6())))
 	{
 		// this node claims we use the wrong node-ID!
 		char const* ptr = ext_ip.string_ptr();
 		if (m_observer != nullptr)
-			m_observer->set_external_address(m_sock, detail::read_v6_address(ptr)
+			m_observer->set_external_address(m_sock, aux::read_v6_address(ptr)
 				, m.addr.address());
 	}
-	else if (ext_ip && ext_ip.string_length() >= int(detail::address_size(udp::v4())))
+	else if (ext_ip && ext_ip.string_length() >= int(aux::address_size(udp::v4())))
 	{
 		char const* ptr = ext_ip.string_ptr();
 		if (m_observer != nullptr)
-			m_observer->set_external_address(m_sock, detail::read_v4_address(ptr)
+			m_observer->set_external_address(m_sock, aux::read_v4_address(ptr)
 				, m.addr.address());
 	}
 
@@ -310,7 +315,7 @@ void node::incoming(aux::listen_socket_handle const& s, msg const& m)
 			TORRENT_ASSERT(m.message.dict_find_string_value("y") == "q");
 			// When a DHT node enters the read-only state, it no longer
 			// responds to 'query' messages that it receives.
-			if (m_settings.read_only) break;
+			if (m_settings.get_bool(settings_pack::dht_read_only)) break;
 
 			// only respond to requests if they're addressed to this node
 			if (s != m_sock) break;
@@ -430,9 +435,9 @@ void node::get_peers(sha1_hash const& info_hash
 	// for info-hash id. then send announce_peer to them.
 	bool const noseeds = bool(flags & announce::seed);
 
-	auto ta = m_settings.privacy_lookups
-		? std::make_shared<dht::obfuscated_get_peers>(*this, info_hash, dcallback, ncallback, noseeds)
-		: std::make_shared<dht::get_peers>(*this, info_hash, dcallback, ncallback, noseeds);
+	auto ta = m_settings.get_bool(settings_pack::dht_privacy_lookups)
+		? std::make_shared<dht::obfuscated_get_peers>(*this, info_hash, std::move(dcallback), std::move(ncallback), noseeds)
+		: std::make_shared<dht::get_peers>(*this, info_hash, std::move(dcallback), std::move(ncallback), noseeds);
 
 	ta->start();
 }
@@ -474,8 +479,7 @@ void node::direct_request(udp::endpoint const& ep, entry& e
 	m_rpc.invoke(e, ep, o);
 }
 
-void node::get_item(sha1_hash const& target
-	, std::function<void(item const&)> f)
+void node::get_item(sha1_hash const& target, std::function<void(item const&)> f)
 {
 #ifndef TORRENT_DISABLE_LOGGING
 	if (m_observer != nullptr && m_observer->should_log(dht_logger::node))
@@ -502,7 +506,7 @@ void node::get_item(public_key const& pk, std::string const& salt
 	}
 #endif
 
-	auto ta = std::make_shared<dht::get_item>(*this, pk, salt, f
+	auto ta = std::make_shared<dht::get_item>(*this, pk, salt, std::move(f)
 		, find_data::nodes_callback());
 	ta->start();
 }
@@ -536,7 +540,7 @@ void node::put_item(sha1_hash const& target, entry const& data, std::function<vo
 #ifndef TORRENT_DISABLE_LOGGING
 	if (m_observer != nullptr && m_observer->should_log(dht_logger::node))
 	{
-		m_observer->log(dht_logger::node, "starting get for [ hash: %s ]"
+		m_observer->log(dht_logger::node, "starting put for [ hash: %s ]"
 			, aux::to_hex(target).c_str());
 	}
 #endif
@@ -560,7 +564,7 @@ void node::put_item(public_key const& pk, std::string const& salt
 	{
 		char hex_key[65];
 		aux::to_hex(pk.bytes, hex_key);
-		m_observer->log(dht_logger::node, "starting get for [ key: %s ]", hex_key);
+		m_observer->log(dht_logger::node, "starting put for [ key: %s ]", hex_key);
 	}
 #endif
 
@@ -718,19 +722,22 @@ time_duration node::connection_timeout()
 	return d;
 }
 
-void node::status(std::vector<dht_routing_bucket>& table
-	, std::vector<dht_lookup>& requests)
+dht_status node::status() const
 {
 	std::lock_guard<std::mutex> l(m_mutex);
 
-	m_table.status(table);
+	dht_status ret;
+	ret.our_id = m_id;
+	ret.local_endpoint = make_udp(m_sock.get_local_endpoint());
+	m_table.status(ret.table);
 
 	for (auto const& r : m_running_requests)
 	{
-		requests.emplace_back();
-		dht_lookup& lookup = requests.back();
+		ret.requests.emplace_back();
+		dht_lookup& lookup = ret.requests.back();
 		r->status(lookup);
 	}
+	return ret;
 }
 
 std::tuple<int, int, int> node::get_stats_counters() const
@@ -773,7 +780,7 @@ entry write_nodes_entry(std::vector<node_entry> const& nodes)
 	for (auto const& n : nodes)
 	{
 		std::copy(n.id.begin(), n.id.end(), out);
-		detail::write_endpoint(n.ep(), out);
+		aux::write_endpoint(n.ep(), out);
 	}
 	return r;
 }
@@ -809,7 +816,7 @@ void node::incoming_request(msg const& m, entry& e)
 	// if this nodes ID doesn't match its IP, tell it what
 	// its IP is with an error
 	// don't enforce this yet
-	if (m_settings.enforce_node_id && !verify_id(id, m.addr.address()))
+	if (m_settings.get_bool(settings_pack::dht_enforce_node_id) && !verify_id(id, m.addr.address()))
 	{
 		incoming_error(e, "invalid node ID");
 		return;
@@ -1197,8 +1204,7 @@ void node::write_nodes_entries(sha1_hash const& info_hash
 	// entry based on the protocol the request came in with
 	if (want.type() != bdecode_node::list_t)
 	{
-		std::vector<node_entry> n;
-		m_table.find_node(info_hash, n, 0);
+		std::vector<node_entry> const n = m_table.find_node(info_hash, {});
 		r[protocol_nodes_key()] = write_nodes_entry(n);
 		return;
 	}
@@ -1215,8 +1221,7 @@ void node::write_nodes_entries(sha1_hash const& info_hash
 			continue;
 		node* wanted_node = m_get_foreign_node(info_hash, wanted.string_value().to_string());
 		if (!wanted_node) continue;
-		std::vector<node_entry> n;
-		wanted_node->m_table.find_node(info_hash, n, 0);
+		std::vector<node_entry> const n = wanted_node->m_table.find_node(info_hash, {});
 		r[wanted_node->protocol_nodes_key()] = write_nodes_entry(n);
 	}
 }

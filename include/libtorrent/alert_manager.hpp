@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg, Daniel Wallin
+Copyright (c) 2003-2013, Daniel Wallin
+Copyright (c) 2013, 2015-2019, Arvid Norberg
+Copyright (c) 2016, 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,7 +37,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/config.hpp"
 #include "libtorrent/alert.hpp"
-#include "libtorrent/heterogeneous_queue.hpp"
+#include "libtorrent/aux_/heterogeneous_queue.hpp"
 #include "libtorrent/stack_allocator.hpp"
 #include "libtorrent/alert_types.hpp" // for num_alert_types
 #include "libtorrent/aux_/array.hpp"
@@ -70,18 +72,19 @@ namespace libtorrent {
 		{
 			std::unique_lock<std::recursive_mutex> lock(m_mutex);
 
+			heterogeneous_queue<alert>& queue = m_alerts[m_generation];
+
 			// don't add more than this number of alerts, unless it's a
 			// high priority alert, in which case we try harder to deliver it
 			// for high priority alerts, double the upper limit
-			if (m_alerts[m_generation].size() / (1 + T::priority)
-				>= m_queue_size_limit)
+			if (queue.size() / (1 + static_cast<int>(T::priority)) >= m_queue_size_limit)
 			{
 				// record that we dropped an alert of this type
 				m_dropped.set(T::alert_type);
 				return;
 			}
 
-			T& alert = m_alerts[m_generation].emplace_back<T>(
+			T& alert = queue.emplace_back<T>(
 				m_allocations[m_generation], std::forward<Args>(args)...);
 
 			maybe_notify(&alert);

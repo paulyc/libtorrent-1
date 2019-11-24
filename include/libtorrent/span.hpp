@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2016, Arvid Norberg
+Copyright (c) 2016-2019, Arvid Norberg
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -33,6 +35,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #ifndef TORRENT_SPAN_HPP_INCLUDED
 #define TORRENT_SPAN_HPP_INCLUDED
 
+#include <string>
 #include <array>
 #include <type_traits>
 #include "libtorrent/assert.hpp"
@@ -108,10 +111,21 @@ namespace aux {
 		span(Cont const& c) // NOLINT
 			: m_ptr(c.data()), m_len(static_cast<difference_type>(c.size())) {}
 
+		template <typename U, typename
+			= typename std::enable_if<aux::compatible_type<U, T>::value>::type>
+		span& operator=(span<U> const& rhs) noexcept
+		{
+			m_ptr = rhs.data();
+			m_len = rhs.size();
+			return *this;
+		}
+
 		index_type size() const noexcept { return m_len; }
 		bool empty() const noexcept { return m_len == 0; }
 		T* data() const noexcept { return m_ptr; }
 
+		using const_iterator = T const*;
+		using const_reverse_iterator = std::reverse_iterator<T const*>;
 		using iterator = T*;
 		using reverse_iterator = std::reverse_iterator<T*>;
 

@@ -135,7 +135,7 @@ dict session_stats_values(session_stats_alert const& alert)
     return d;
 }
 
-#ifndef TORRENT_NO_DEPRECATE
+#if TORRENT_ABI_VERSION == 1
 entry const& get_resume_data_entry(save_resume_data_alert const& self)
 {
 	return *self.resume_data;
@@ -200,6 +200,9 @@ namespace boost
 	POLY(state_changed_alert)
 	POLY(state_update_alert)
 	POLY(i2p_alert)
+	POLY(dht_immutable_item_alert)
+	POLY(dht_mutable_item_alert)
+	POLY(dht_put_alert)
 	POLY(dht_reply_alert)
 	POLY(dht_announce_alert)
 	POLY(dht_get_peers_alert)
@@ -221,16 +224,22 @@ namespace boost
 	POLY(dht_outgoing_get_peers_alert)
 	POLY(lsd_error_alert)
 	POLY(dht_stats_alert)
-	POLY(dht_immutable_item_alert)
-	POLY(dht_mutable_item_alert)
-	POLY(dht_put_alert)
-	POLY(session_stats_alert)
+	POLY(incoming_request_alert)
+	POLY(dht_log_alert)
+	POLY(dht_pkt_alert)
 	POLY(dht_get_peers_reply_alert)
+	POLY(dht_direct_response_alert)
+	POLY(session_error_alert)
+	POLY(dht_live_nodes_alert)
+	POLY(session_stats_header_alert)
+	POLY(dht_sample_infohashes_alert)
+	POLY(block_uploaded_alert)
+	POLY(alerts_dropped_alert)
+	POLY(session_stats_alert)
 
 #if TORRENT_ABI_VERSION == 1
 	POLY(anonymous_mode_alert)
 	POLY(torrent_added_alert)
-	POLY(torrent_update_alert)
 #endif
 
 #ifndef TORRENT_DISABLE_LOGGING
@@ -245,6 +254,19 @@ namespace boost
 }
 
 struct dummy3 {};
+
+bytes get_pkt_buf(dht_pkt_alert const& alert)
+{
+    return {alert.pkt_buf().data(), static_cast<std::size_t>(alert.pkt_buf().size())};
+}
+
+list get_dropped_alerts(alerts_dropped_alert const& alert)
+{
+    list ret;
+    for (int i = 0; i < int(alert.dropped_alerts.size()); ++i)
+        ret.append(bool(alert.dropped_alerts[i]));
+    return ret;
+}
 
 void bind_alert()
 {
@@ -345,6 +367,7 @@ void bind_alert()
        .value("partfile_read", operation_t::partfile_read)
        .value("partfile_write", operation_t::partfile_write)
        .value("hostname_lookup", operation_t::hostname_lookup)
+       .value("symlink", operation_t::symlink)
        ;
 
     def("operation_name", static_cast<char const*(*)(operation_t)>(&lt::operation_name));
@@ -438,7 +461,7 @@ void bind_alert()
         ;
 
     class_<peer_request>("peer_request")
-        .def_readonly("piece", &peer_request::piece)
+        .add_property("piece", make_getter(&peer_request::piece, by_value()))
         .def_readonly("start", &peer_request::start)
         .def_readonly("length", &peer_request::length)
         .def(self == self)
@@ -478,6 +501,7 @@ void bind_alert()
         .def_readonly("path", &storage_moved_alert::path)
 #endif
         .def("storage_path", &storage_moved_alert::storage_path)
+        .def("old_path", &storage_moved_alert::old_path)
         ;
 
     class_<storage_moved_failed_alert, bases<torrent_alert>, noncopyable>(
@@ -582,10 +606,16 @@ void bind_alert()
 
     enum_<socket_type_t>("socket_type_t")
        .value("tcp", socket_type_t::tcp)
-       .value("tcp_ssl", socket_type_t::tcp_ssl)
-       .value("udp", socket_type_t::udp)
-       .value("i2p", socket_type_t::i2p)
        .value("socks5", socket_type_t::socks5)
+       .value("http", socket_type_t::http)
+       .value("utp", socket_type_t::utp)
+#if TORRENT_ABI_VERSION <= 2
+       .value("udp", socket_type_t::udp)
+#endif
+       .value("i2p", socket_type_t::i2p)
+       .value("tcp_ssl", socket_type_t::tcp_ssl)
+       .value("socks5_ssl", socket_type_t::socks5_ssl)
+       .value("http_ssl", socket_type_t::http_ssl)
        .value("utp_ssl", socket_type_t::utp_ssl)
        ;
 
@@ -700,6 +730,7 @@ void bind_alert()
         .def_readonly("name", &file_renamed_alert::name)
 #endif
         .def("new_name", &file_renamed_alert::new_name)
+        .def("old_name", &file_renamed_alert::old_name)
         ;
 
     class_<file_rename_failed_alert, bases<torrent_alert>, noncopyable>(
@@ -881,14 +912,6 @@ void bind_alert()
        .add_property("params", &add_torrent_alert::params)
        ;
 
-#if TORRENT_ABI_VERSION == 1
-    class_<torrent_update_alert, bases<torrent_alert>, noncopyable>(
-       "torrent_update_alert", no_init)
-        .def_readonly("old_ih", &torrent_update_alert::old_ih)
-        .def_readonly("new_ih", &torrent_update_alert::new_ih)
-        ;
-#endif
-
     class_<dht_outgoing_get_peers_alert, bases<alert>, noncopyable>(
        "dht_outgoing_get_peers_alert", no_init)
         .def_readonly("info_hash", &dht_outgoing_get_peers_alert::info_hash)
@@ -940,6 +963,16 @@ void bind_alert()
        .add_property("routing_table", &dht_stats_routing_table)
         ;
 
+    class_<dht_log_alert, bases<alert>, noncopyable>("dht_log_alert", no_init)
+        .def_readonly("module", &dht_log_alert::module)
+        .def("log_message", &dht_log_alert::log_message)
+    ;
+
+    class_<dht_pkt_alert, bases<alert>, noncopyable>(
+        "dht_pkt_alert", no_init)
+        .add_property("pkt_buf", &get_pkt_buf)
+        ;
+
     class_<dht_immutable_item_alert, bases<alert>, noncopyable>(
        "dht_immutable_item_alert", no_init)
         .def_readonly("target", &dht_immutable_item_alert::target)
@@ -982,6 +1015,17 @@ void bind_alert()
         .def_readonly("info_hash", &dht_get_peers_reply_alert::info_hash)
         .def("num_peers", &dht_get_peers_reply_alert::num_peers)
         .def("peers", peers)
+        ;
+
+    class_<block_uploaded_alert, bases<peer_alert>, noncopyable>(
+       "block_uploaded_alert", no_init)
+        .add_property("block_index", &block_uploaded_alert::block_index)
+        .add_property("piece_index", make_getter((&block_uploaded_alert::piece_index), by_value()))
+        ;
+
+    class_<alerts_dropped_alert, bases<alert>, noncopyable>(
+       "alerts_dropped_alert", no_init)
+        .add_property("dropped_alerts", &get_dropped_alerts)
         ;
 
 }

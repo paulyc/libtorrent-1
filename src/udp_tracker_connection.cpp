@@ -1,6 +1,10 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2004-2019, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016-2017, Steven Siloti
+Copyright (c) 2016, Pavel Pimenov
+Copyright (c) 2016-2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -58,7 +62,7 @@ namespace libtorrent {
 	std::mutex udp_tracker_connection::m_cache_mutex;
 
 	udp_tracker_connection::udp_tracker_connection(
-		io_service& ios
+		io_context& ios
 		, tracker_manager& man
 		, tracker_request const& req
 		, std::weak_ptr<request_callback> c)
@@ -108,7 +112,7 @@ namespace libtorrent {
 			// when stopping, pass in the cache-only flag, because we
 			// don't want to get stuck on DNS lookups when shutting down
 			m_man.host_resolver().async_resolve(hostname
-				, (tracker_req().event == tracker_request::stopped
+				, (tracker_req().event == event_t::stopped
 					? resolver_interface::cache_only : resolver_flags{})
 					| resolver_interface::abort_on_shutdown
 				, std::bind(&udp_tracker_connection::name_lookup
@@ -121,7 +125,7 @@ namespace libtorrent {
 #endif
 		}
 
-		set_timeout(tracker_req().event == tracker_request::stopped
+		set_timeout(tracker_req().event == event_t::stopped
 			? settings.get_int(settings_pack::stop_tracker_timeout)
 			: settings.get_int(settings_pack::tracker_completion_timeout)
 			, settings.get_int(settings_pack::tracker_receive_timeout));
@@ -148,7 +152,7 @@ namespace libtorrent {
 		std::shared_ptr<request_callback> cb = requester();
 		if (cb && cb->should_log())
 		{
-			cb->debug_log(R"(*** UDP_TRACKER [ host: "%s" ip: "%s" | error: "%s" ])"
+			cb->debug_log(R"(*** UDP_TRACKER [ host: "%s" ip: "%s" | ERROR: "%s" ])"
 				, m_hostname.c_str(), print_endpoint(m_target).c_str(), ec.message().c_str());
 		}
 #endif
@@ -163,11 +167,11 @@ namespace libtorrent {
 				, m_hostname.c_str(), print_endpoint(m_target).c_str());
 		}
 #endif
-		get_io_service().post(std::bind(
+		post(get_executor(), std::bind(
 			&udp_tracker_connection::start_announce, shared_from_this()));
 
 		aux::session_settings const& settings = m_man.settings();
-		set_timeout(tracker_req().event == tracker_request::stopped
+		set_timeout(tracker_req().event == event_t::stopped
 			? settings.get_int(settings_pack::stop_tracker_timeout)
 			: settings.get_int(settings_pack::tracker_completion_timeout)
 			, settings.get_int(settings_pack::tracker_receive_timeout));
@@ -450,9 +454,9 @@ namespace libtorrent {
 		cce.connection_id = connection_id;
 		cce.expires = aux::time_now() + seconds(m_man.settings().get_int(settings_pack::udp_tracker_token_expiry));
 
-		if (0 == (tracker_req().kind & tracker_request::scrape_request))
+		if (!(tracker_req().kind & tracker_request::scrape_request))
 			send_udp_announce();
-		else if (0 != (tracker_req().kind & tracker_request::scrape_request))
+		else if (tracker_req().kind & tracker_request::scrape_request)
 			send_udp_scrape();
 		return true;
 	}
@@ -513,7 +517,7 @@ namespace libtorrent {
 #ifndef TORRENT_DISABLE_LOGGING
 		if (cb && cb->should_log())
 		{
-			cb->debug_log("==> UDP_TRACKER_CONNECT [ to: %s ih: %s]"
+			cb->debug_log("==> UDP_TRACKER_CONNECT [ to: %s ih: %s ]"
 				, m_hostname.empty()
 					? print_endpoint(m_target).c_str()
 					: (m_hostname + ":" + to_string(m_target.port()).data()).c_str()
@@ -725,7 +729,7 @@ namespace libtorrent {
 			address ip = make_address(settings.get_str(settings_pack::announce_ip).c_str(), ec);
 			if (!ec && ip.is_v4()) announce_ip = ip.to_v4();
 		}
-		aux::write_uint32(announce_ip.to_ulong(), out);
+		aux::write_uint32(announce_ip.to_uint(), out);
 		aux::write_int32(req.key, out); // key
 		aux::write_int32(req.num_want, out); // num_want
 		aux::write_uint16(req.listen_port, out); // port

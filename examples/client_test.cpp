@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2003-2017, Arvid Norberg
+Copyright (c) 2003-2019, Arvid Norberg
+Copyright (c) 2015, Mike Tzou
+Copyright (c) 2016, 2018, Alden Torres
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017, AllSeeingEyeTolledEweSew
+Copyright (c) 2017-2018, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -47,6 +52,10 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <sys/stat.h>
 #endif
 
+#ifdef TORRENT_UTP_LOG_ENABLE
+#include "libtorrent/utp_stream.hpp"
+#endif
+
 #include "libtorrent/torrent_info.hpp"
 #include "libtorrent/announce_entry.hpp"
 #include "libtorrent/entry.hpp"
@@ -64,6 +73,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/write_resume_data.hpp"
 #include "libtorrent/string_view.hpp"
 #include "libtorrent/disk_interface.hpp" // for open_file_state
+#include "libtorrent/disabled_disk_io.hpp" // for disabled_disk_io_constructor
 
 #include "torrent_view.hpp"
 #include "session_view.hpp"
@@ -75,15 +85,18 @@ using lt::piece_index_t;
 using lt::file_index_t;
 using lt::torrent_handle;
 using lt::add_torrent_params;
-using lt::cache_status;
 using lt::total_seconds;
 using lt::torrent_flags_t;
 using lt::seconds;
-using lt::operator""_sv;
+using lt::operator "" _sv;
 using lt::address_v4;
 using lt::address_v6;
+using lt::make_address_v6;
+using lt::make_address_v4;
+using lt::make_address;
 
 using std::chrono::duration_cast;
+using std::stoi;
 
 #ifdef _WIN32
 
@@ -244,6 +257,12 @@ bool is_absolute_path(std::string const& f)
 #endif
 }
 
+std::string trunc(std::string str, int const sz)
+{
+	if (str.size() > std::size_t(sz)) str.resize(std::size_t(sz));
+	return str;
+}
+
 std::string path_append(std::string const& lhs, std::string const& rhs)
 {
 	if (lhs.empty() || lhs == ".") return rhs;
@@ -278,13 +297,12 @@ std::string make_absolute_path(std::string const& p)
 std::string print_endpoint(lt::tcp::endpoint const& ep)
 {
 	using namespace lt;
-	lt::error_code ec;
 	char buf[200];
 	address const& addr = ep.address();
 	if (addr.is_v6())
-		std::snprintf(buf, sizeof(buf), "[%s]:%d", addr.to_string(ec).c_str(), ep.port());
+		std::snprintf(buf, sizeof(buf), "[%s]:%d", addr.to_string().c_str(), ep.port());
 	else
-		std::snprintf(buf, sizeof(buf), "%s:%d", addr.to_string(ec).c_str(), ep.port());
+		std::snprintf(buf, sizeof(buf), "%s:%d", addr.to_string().c_str(), ep.port());
 	return buf;
 }
 
@@ -295,7 +313,7 @@ FILE* g_log_file = nullptr;
 int peer_index(lt::tcp::endpoint addr, std::vector<lt::peer_info> const& peers)
 {
 	using namespace lt;
-	std::vector<peer_info>::const_iterator i = std::find_if(peers.begin(), peers.end()
+	auto i = std::find_if(peers.begin(), peers.end()
 		, [&addr](peer_info const& pi) { return pi.ip == addr; });
 	if (i == peers.end()) return -1;
 
@@ -475,7 +493,7 @@ int print_peer_info(std::string& out
 	return pos;
 }
 
-int allocation_mode = lt::storage_mode_sparse;
+lt::storage_mode_t allocation_mode = lt::storage_mode_sparse;
 std::string save_path(".");
 int torrent_upload_limit = 0;
 int torrent_download_limit = 0;
@@ -484,10 +502,8 @@ int poll_interval = 5;
 int max_connections_per_torrent = 50;
 bool seed_mode = false;
 bool stats_enabled = false;
-int cache_size = -1;
 
 bool share_mode = false;
-bool disable_storage = false;
 
 bool quit = false;
 
@@ -511,10 +527,23 @@ void print_settings(int const start, int const num
 	}
 }
 
-std::string resume_file(lt::sha1_hash const& info_hash)
+std::string resume_file(lt::info_hash_t const& info_hash)
 {
 	return path_append(save_path, path_append(".resume"
-		, to_hex(info_hash) + ".resume"));
+		, to_hex(info_hash.get_best()) + ".resume"));
+}
+
+void set_torrent_params(lt::add_torrent_params& p)
+{
+	p.max_connections = max_connections_per_torrent;
+	p.max_uploads = -1;
+	p.upload_limit = torrent_upload_limit;
+	p.download_limit = torrent_download_limit;
+
+	if (seed_mode) p.flags |= lt::torrent_flags::seed_mode;
+	if (share_mode) p.flags |= lt::torrent_flags::share_mode;
+	p.save_path = save_path;
+	p.storage_mode = allocation_mode;
 }
 
 void add_magnet(lt::session& ses, lt::string_view uri)
@@ -535,18 +564,8 @@ void add_magnet(lt::session& ses, lt::string_view uri)
 		p = lt::read_resume_data(resume_data, ec);
 		if (ec) std::printf("  failed to load resume data: %s\n", ec.message().c_str());
 	}
-	ec.clear();
 
-	p.max_connections = max_connections_per_torrent;
-	p.max_uploads = -1;
-	p.upload_limit = torrent_upload_limit;
-	p.download_limit = torrent_download_limit;
-
-	if (seed_mode) p.flags |= lt::torrent_flags::seed_mode;
-	if (disable_storage) p.storage = lt::disabled_storage_constructor;
-	if (share_mode) p.flags |= lt::torrent_flags::share_mode;
-	p.save_path = save_path;
-	p.storage_mode = static_cast<lt::storage_mode_t>(allocation_mode);
+	set_torrent_params(p);
 
 	std::printf("adding magnet: %s\n", uri.to_string().c_str());
 	ses.async_add_torrent(std::move(p));
@@ -579,21 +598,11 @@ bool add_torrent(lt::session& ses, std::string torrent)
 		p = lt::read_resume_data(resume_data, ec);
 		if (ec) std::printf("  failed to load resume data: %s\n", ec.message().c_str());
 	}
-	ec.clear();
 
-	if (seed_mode) p.flags |= lt::torrent_flags::seed_mode;
-	if (disable_storage) p.storage = lt::disabled_storage_constructor;
-	if (share_mode) p.flags |= lt::torrent_flags::share_mode;
+	set_torrent_params(p);
 
-	p.max_connections = max_connections_per_torrent;
-	p.max_uploads = -1;
-	p.upload_limit = torrent_upload_limit;
-	p.download_limit = torrent_download_limit;
 	p.ti = ti;
-	p.save_path = save_path;
-	p.storage_mode = (storage_mode_t)allocation_mode;
 	p.flags &= ~lt::torrent_flags::duplicate_is_error;
-	p.userdata = static_cast<void*>(new std::string(torrent));
 	ses.async_add_torrent(std::move(p));
 	return true;
 }
@@ -742,7 +751,7 @@ bool handle_alert(torrent_view& view, session_view& ses_view
 	if (torrent_need_cert_alert* p = alert_cast<torrent_need_cert_alert>(a))
 	{
 		torrent_handle h = p->handle;
-		std::string base_name = path_append("certificates", to_hex(h.info_hash()));
+		std::string base_name = path_append("certificates", to_hex(h.info_hash().get_best()));
 		std::string cert = base_name + ".pem";
 		std::string priv = base_name + "_key.pem";
 
@@ -838,7 +847,7 @@ bool handle_alert(torrent_view& view, session_view& ses_view
 					int peer_port = atoi(port);
 					error_code ec;
 					if (peer_port > 0)
-						h.connect_peer(tcp::endpoint(address::from_string(ip, ec), std::uint16_t(peer_port)));
+						h.connect_peer(tcp::endpoint(make_address(ip, ec), std::uint16_t(peer_port)));
 				}
 			}
 		}
@@ -912,64 +921,52 @@ void pop_alerts(torrent_view& view, session_view& ses_view
 	}
 }
 
-void print_piece(lt::partial_piece_info const* pp
-	, lt::cached_piece_info const* cs
+void print_piece(lt::partial_piece_info const& pp
 	, std::vector<lt::peer_info> const& peers
 	, std::string& out)
 {
 	using namespace lt;
 
 	char str[1024];
-	assert(pp == nullptr || cs == nullptr || cs->piece == pp->piece_index);
-	int piece = static_cast<int>(pp ? pp->piece_index : cs->piece);
-	int num_blocks = pp ? pp->blocks_in_piece : int(cs->blocks.size());
+	int const piece = static_cast<int>(pp.piece_index);
+	int const num_blocks = pp.blocks_in_piece;
 
 	std::snprintf(str, sizeof(str), "%5d:[", piece);
 	out += str;
 	string_view last_color;
 	for (int j = 0; j < num_blocks; ++j)
 	{
-		int const index = pp ? peer_index(pp->blocks[j].peer(), peers) % 36 : -1;
-		char const* chr = " ";
+		int const index = peer_index(pp.blocks[j].peer(), peers) % 36;
 		bool const snubbed = index >= 0 ? bool(peers[index].flags & lt::peer_info::snubbed) : false;
-
+		char const* chr = " ";
 		char const* color = "";
 
-		if (pp == nullptr)
+		if (pp.blocks[j].bytes_progress > 0
+				&& pp.blocks[j].state == block_info::requested)
 		{
-			color = cs->blocks[j] ? esc("34;7") : esc("0");
-			chr = " ";
-		}
-		else
-		{
-			if (cs && cs->blocks[j] && pp->blocks[j].state != block_info::finished)
-				color = esc("36;7");
-			else if (pp->blocks[j].bytes_progress > 0
-					&& pp->blocks[j].state == block_info::requested)
-			{
-				if (pp->blocks[j].num_peers > 1) color = esc("0;1");
-				else color = snubbed ? esc("0;35") : esc("0;33");
+			if (pp.blocks[j].num_peers > 1) color = esc("0;1");
+			else color = snubbed ? esc("0;35") : esc("0;33");
 
 #ifndef TORRENT_WINDOWS
-				static char const* const progress[] = {
-					"\u2581", "\u2582", "\u2583", "\u2584",
-					"\u2585", "\u2586", "\u2587", "\u2588"
-				};
-				chr = progress[pp->blocks[j].bytes_progress * 8 / pp->blocks[j].block_size];
+			static char const* const progress[] = {
+				"\u2581", "\u2582", "\u2583", "\u2584",
+				"\u2585", "\u2586", "\u2587", "\u2588"
+			};
+			chr = progress[pp.blocks[j].bytes_progress * 8 / pp.blocks[j].block_size];
 #else
-				static char const* const progress[] = { "\xb0", "\xb1", "\xb2" };
-				chr = progress[pp->blocks[j].bytes_progress * 3 / pp->blocks[j].block_size];
+			static char const* const progress[] = { "\xb0", "\xb1", "\xb2" };
+			chr = progress[pp.blocks[j].bytes_progress * 3 / pp.blocks[j].block_size];
 #endif
-			}
-			else if (pp->blocks[j].state == block_info::finished) color = esc("32;7");
-			else if (pp->blocks[j].state == block_info::writing) color = esc("36;7");
-			else if (pp->blocks[j].state == block_info::requested)
-			{
-				color = snubbed ? esc("0;35") : esc("0");
-				chr = "=";
-			}
-			else { color = esc("0"); chr = " "; }
 		}
+		else if (pp.blocks[j].state == block_info::finished) color = esc("32;7");
+		else if (pp.blocks[j].state == block_info::writing) color = esc("36;7");
+		else if (pp.blocks[j].state == block_info::requested)
+		{
+			color = snubbed ? esc("0;35") : esc("0");
+			chr = "=";
+		}
+		else { color = esc("0"); chr = " "; }
+
 		if (last_color != color)
 		{
 			out += color;
@@ -1022,8 +1019,15 @@ CLIENT OPTIONS
                         previous command line options, so be sure to specify this first
   -G                    Add torrents in seed-mode (i.e. assume all pieces
                         are present and check hashes on-demand)
-  -O                    print session stats counters to the log
-
+  -e <loops>            exit client after the specified number of iterations
+                        through the main loop
+  -O                    print session stats counters to the log)"
+#ifdef TORRENT_UTP_LOG_ENABLE
+R"(
+  -q                    Enable uTP transport-level verbose logging
+)"
+#endif
+R"(
 LIBTORRENT SETTINGS
   --<name-of-setting>=<value>
                         set the libtorrent setting <name> to <value>
@@ -1070,22 +1074,20 @@ example alert_masks:
 
 	lt::session_params params;
 
-	lt::error_code ec;
-
 #ifndef TORRENT_DISABLE_DHT
-	params.dht_settings.privacy_lookups = true;
+	params.settings.set_bool(settings_pack::dht_privacy_lookups, true);
 
 	std::vector<char> in;
 	if (load_file(".ses_state", in))
 	{
 		lt::bdecode_node e;
+		lt::error_code ec;
 		if (bdecode(&in[0], &in[0] + in.size(), e, ec) == 0)
 			params = read_session_params(e, session_handle::save_dht_state);
 	}
 #endif
 
 	auto& settings = params.settings;
-	settings.set_int(settings_pack::cache_size, cache_size);
 	settings.set_int(settings_pack::choking_algorithm, settings_pack::rate_based_choker);
 
 	settings.set_str(settings_pack::user_agent, "client_test/" LIBTORRENT_VERSION);
@@ -1109,6 +1111,7 @@ example alert_masks:
 	bool rate_limit_locals = false;
 
 	std::deque<std::string> events;
+	int loop_limit = -1;
 
 	lt::time_point next_dir_scan = lt::clock_type::now();
 
@@ -1191,6 +1194,11 @@ example alert_masks:
 			case 'G': seed_mode = true; --i; break;
 			case 's': save_path = make_absolute_path(arg); break;
 			case 'O': stats_enabled = true; --i; break;
+#ifdef TORRENT_UTP_LOG_ENABLE
+			case 'q':
+				lt::set_utp_stream_logging(true);
+				break;
+#endif
 			case 'U': torrent_upload_limit = atoi(arg) * 1000; break;
 			case 'D': torrent_download_limit = atoi(arg) * 1000; break;
 			case 'm': monitor_dir = make_absolute_path(arg); break;
@@ -1231,7 +1239,17 @@ example alert_masks:
 					rate_limit_locals = true;
 					break;
 				}
-			case '0': disable_storage = true; --i;
+			case '0':
+				{
+					params.disk_io_constructor = lt::disabled_disk_io_constructor;
+					--i;
+					break;
+				}
+			case 'e':
+				{
+					loop_limit = atoi(arg);
+					break;
+				}
 		}
 		++i; // skip the argument
 	}
@@ -1253,11 +1271,11 @@ example alert_masks:
 	if (rate_limit_locals)
 	{
 		lt::ip_filter pcf;
-		pcf.add_rule(address_v4::from_string("0.0.0.0")
-			, address_v4::from_string("255.255.255.255")
+		pcf.add_rule(make_address_v4("0.0.0.0")
+			, make_address_v4("255.255.255.255")
 			, 1 << static_cast<std::uint32_t>(lt::session::global_peer_class_id));
-		pcf.add_rule(address_v6::from_string("::")
-			, address_v6::from_string("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), 1);
+		pcf.add_rule(make_address_v6("::")
+			, make_address_v6("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff"), 1);
 		ses.set_peer_class_filter(pcf);
 	}
 
@@ -1311,15 +1329,16 @@ example alert_masks:
 
 	// main loop
 	std::vector<lt::peer_info> peers;
-	std::vector<lt::partial_piece_info> queue;
 
 #ifndef _WIN32
 	signal(SIGTERM, signal_handler);
 	signal(SIGINT, signal_handler);
 #endif
 
-	while (!quit)
+	while (!quit && loop_limit != 0)
 	{
+		if (loop_limit > 0) --loop_limit;
+
 		ses.post_torrent_updates();
 		ses.post_session_stats();
 		ses.post_dht_stats();
@@ -1586,13 +1605,6 @@ example alert_masks:
 				if (c == '5') print_peer_rate = !print_peer_rate;
 				if (c == '6') print_fails = !print_fails;
 				if (c == '7') print_send_bufs = !print_send_bufs;
-				if (c == 'C')
-				{
-					cache_size = (cache_size == 0) ? -1 : 0;
-					settings_pack p;
-					p.set_int(settings_pack::cache_size, cache_size);
-					ses.apply_settings(std::move(p));
-				}
 				if (c == 'h')
 				{
 					clear_screen();
@@ -1605,13 +1617,13 @@ CLIENT OPTIONS
 [q] quit client                                 [m] add magnet link
 
 TORRENT ACTIONS
-[p] pause/resume selected torrent               [C] toggle disk cache
+[p] pause/resume selected torrent               [W] remove all web seeds
 [s] toggle sequential download                  [j] force recheck
 [space] toggle session pause                    [c] clear error
 [v] scrape                                      [D] delete torrent and data
 [r] force reannounce                            [R] save resume data for all torrents
 [o] set piece deadlines (sequential dl)         [P] toggle auto-managed
-[k] toggle force-started                        [W] remove all web seeds
+[k] toggle force-started
 
 DISPLAY OPTIONS
 left/right arrow keys: select torrent filter
@@ -1649,11 +1661,7 @@ COLUMN OPTIONS
 		int pos = view.height() + ses_view.height();
 		set_cursor_pos(0, pos);
 
-		int cache_flags = print_downloads ? 0 : lt::session::disk_cache_no_pieces;
 		torrent_handle h = view.get_active_handle();
-
-		cache_status cs;
-		ses.get_cache_info(&cs, h, cache_flags);
 
 #ifndef TORRENT_DISABLE_DHT
 		if (show_dht_status)
@@ -1737,19 +1745,25 @@ COLUMN OPTIONS
 				std::vector<lt::announce_entry> tr = h.trackers();
 				for (lt::announce_entry const& ae : h.trackers())
 				{
-					auto best_ae = std::min_element(ae.endpoints.begin(), ae.endpoints.end()
-						, [](lt::announce_endpoint const& l, lt::announce_endpoint const& r) { return l.fails < r.fails; } );
-
-					if (pos + 1 >= terminal_height) break;
-					std::snprintf(str, sizeof(str), "%2d %-55s fails: %-3d (%-3d) %s %s %5d \"%s\" %s\x1b[K\n"
-						, ae.tier, ae.url.c_str()
-						, best_ae != ae.endpoints.end() ? best_ae->fails : 0, ae.fail_limit, ae.verified?"OK ":"-  "
-						, to_string(best_ae != ae.endpoints.end() ? int(total_seconds(best_ae->next_announce - now)) : 0, 8).c_str()
-						, best_ae != ae.endpoints.end() && best_ae->min_announce > now ? int(total_seconds(best_ae->min_announce - now)) : 0
-						, best_ae != ae.endpoints.end() && best_ae->last_error ? best_ae->last_error.message().c_str() : ""
-						, best_ae != ae.endpoints.end() ? best_ae->message.c_str() : "");
-					out += str;
-					pos += 1;
+					for (lt::announce_endpoint const& aep : ae.endpoints)
+					{
+						for (lt::protocol_version const v : {lt::protocol_version::V1, lt::protocol_version::V2})
+						{
+							if (pos + 1 >= terminal_height) break;
+							if (!s.info_hash.has(v)) continue;
+							std::snprintf(str, sizeof(str), "%2d %d %-20s %-55s fails: %-3d (%-3d) %s %s %5d \"%s\" %s\x1b[K\n"
+								, ae.tier, int(v), trunc(print_endpoint(aep.local_endpoint), 20).c_str()
+								, ae.url.c_str()
+								, aep.info_hashes[v].fails
+								, ae.fail_limit, ae.verified ? "OK " : "-  "
+								, to_string(int(total_seconds(aep.info_hashes[v].next_announce - now)), 8).c_str()
+								, aep.info_hashes[v].min_announce > now ? int(total_seconds(aep.info_hashes[v].min_announce - now)) : 0
+								, aep.info_hashes[v].last_error ? aep.info_hashes[v].last_error.message().c_str() : ""
+								, aep.info_hashes[v].message.c_str());
+							out += str;
+							pos += 1;
+						}
+					}
 				}
 			}
 
@@ -1762,61 +1776,16 @@ COLUMN OPTIONS
 
 			if (print_downloads)
 			{
-				h.get_download_queue(queue);
-
-				std::sort(queue.begin(), queue.end()
-					, [] (lt::partial_piece_info const& lhs, lt::partial_piece_info const& rhs)
-					{ return lhs.piece_index < rhs.piece_index; });
-
-				std::sort(cs.pieces.begin(), cs.pieces.end()
-					, [](lt::cached_piece_info const& lhs, lt::cached_piece_info const& rhs)
-					{ return lhs.piece < rhs.piece; });
+				std::vector<lt::partial_piece_info> queue = h.get_download_queue();
 
 				int p = 0; // this is horizontal position
-				for (lt::cached_piece_info const& i : cs.pieces)
-				{
-					if (pos + 3 >= terminal_height) break;
-
-					lt::partial_piece_info* pp = nullptr;
-					lt::partial_piece_info tmp;
-					tmp.piece_index = i.piece;
-					std::vector<lt::partial_piece_info>::iterator ppi
-						= std::lower_bound(queue.begin(), queue.end(), tmp
-						, [](lt::partial_piece_info const& lhs, lt::partial_piece_info const& rhs)
-						{ return lhs.piece_index < rhs.piece_index; });
-
-					if (ppi != queue.end() && ppi->piece_index == i.piece) pp = &*ppi;
-
-					print_piece(pp, &i, peers, out);
-
-					int num_blocks = pp ? pp->blocks_in_piece : int(i.blocks.size());
-					p += num_blocks + 8;
-					bool continuous_mode = 8 + num_blocks > terminal_width;
-					if (continuous_mode)
-					{
-						while (p > terminal_width)
-						{
-							p -= terminal_width;
-							++pos;
-						}
-					}
-					else if (p + num_blocks + 8 > terminal_width)
-					{
-						out += "\x1b[K\n";
-						pos += 1;
-						p = 0;
-					}
-
-					if (pp) queue.erase(ppi);
-				}
-
 				for (lt::partial_piece_info const& i : queue)
 				{
 					if (pos + 3 >= terminal_height) break;
 
-					print_piece(&i, nullptr, peers, out);
+					print_piece(i, peers, out);
 
-					int num_blocks = i.blocks_in_piece;
+					int const num_blocks = i.blocks_in_piece;
 					p += num_blocks + 8;
 					bool continuous_mode = 8 + num_blocks > terminal_width;
 					if (continuous_mode)
@@ -1840,10 +1809,9 @@ COLUMN OPTIONS
 					pos += 1;
 				}
 
-				std::snprintf(str, sizeof(str), "%s %s read cache | %s %s downloading | %s %s cached | %s %s flushed | %s %s snubbed | = requested\x1b[K\n"
-					, esc("34;7"), esc("0") // read cache
+				std::snprintf(str, sizeof(str), "%s %s downloading | %s %s writing | %s %s flushed | %s %s snubbed | = requested\x1b[K\n"
 					, esc("33;7"), esc("0") // downloading
-					, esc("36;7"), esc("0") // cached
+					, esc("36;7"), esc("0") // writing
 					, esc("32;7"), esc("0") // flushed
 					, esc("35;7"), esc("0") // snubbed
 					);

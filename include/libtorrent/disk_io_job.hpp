@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2010-2018, Arvid Norberg
+Copyright (c) 2014-2019, Arvid Norberg
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017-2018, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -54,23 +56,20 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	struct cached_piece_entry;
+	struct default_storage;
 
 	enum class job_action_t : std::uint8_t
 	{
 		read
 		, write
 		, hash
+		, hash2
 		, move_storage
 		, release_files
 		, delete_files
 		, check_fastresume
 		, rename_file
 		, stop_torrent
-		, flush_piece
-		, flush_hashed
-		, flush_storage
-		, trim_cache
 		, file_priority
 		, clear_piece
 		, num_job_ids
@@ -111,10 +110,6 @@ namespace libtorrent {
 		// instead of executing
 		static constexpr disk_job_flags_t aborted = 6_bit;
 
-		// for write jobs, returns true if its block
-		// is not dirty anymore
-		bool completed(cached_piece_entry const* pe);
-
 		// for read and write, this is the disk_buffer_holder
 		// for other jobs, it may point to other job-specific types
 		// for move_storage and rename_file this is a string
@@ -126,13 +121,14 @@ namespace libtorrent {
 			> argument;
 
 		// the disk storage this job applies to (if applicable)
-		std::shared_ptr<storage_interface> storage;
+		std::shared_ptr<default_storage> storage;
 
 		// this is called when operation completes
 
-		using read_handler = std::function<void(disk_buffer_holder block, disk_job_flags_t flags, storage_error const& se)>;
+		using read_handler = std::function<void(disk_buffer_holder block, storage_error const& se)>;
 		using write_handler = std::function<void(storage_error const&)>;
 		using hash_handler = std::function<void(piece_index_t, sha1_hash const&, storage_error const&)>;
+		using hash2_handler = std::function<void(piece_index_t, sha256_hash const&, storage_error const&)>;
 		using move_handler = std::function<void(status_t, std::string, storage_error const&)>;
 		using release_handler = std::function<void()>;
 		using check_handler = std::function<void(status_t, storage_error const&)>;
@@ -143,6 +139,7 @@ namespace libtorrent {
 		boost::variant<read_handler
 			, write_handler
 			, hash_handler
+			, hash2_handler
 			, move_handler
 			, release_handler
 			, check_handler
@@ -159,7 +156,12 @@ namespace libtorrent {
 		{
 			un() {}
 			// result for hash jobs
-			sha1_hash piece_hash;
+			struct hash_args
+			{
+				sha1_hash piece_hash;
+				span<sha256_hash> block_hashes;
+			} h;
+			sha256_hash piece_hash2;
 
 			// this is used for check_fastresume to pass in a vector of hard-links
 			// to create. Each element corresponds to a file in the file_storage.
@@ -196,7 +198,7 @@ namespace libtorrent {
 		status_t ret = status_t::no_error;
 
 		// flags controlling this job
-		disk_job_flags_t flags{};
+		disk_job_flags_t flags = disk_job_flags_t{};
 
 		move_flags_t move_flags = move_flags_t::always_replace_files;
 

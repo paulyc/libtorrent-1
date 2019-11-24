@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2008-2010, 2012-2019, Arvid Norberg
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2018, Eugene Shalygin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -355,7 +357,7 @@ namespace libtorrent {
 		}
 
 		lazy_entry(lazy_entry&&);
-		lazy_entry& operator=(lazy_entry&&);
+		lazy_entry& operator=(lazy_entry&&) &;
 
 	private:
 

@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2019, Arvid Norberg
+Copyright (c) 2016-2017, 2019, Steven Siloti
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2019, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,14 +37,16 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/error_code.hpp"
 #include "libtorrent/string_util.hpp" // for to_string()
 
+#include <sstream>
+
 namespace libtorrent {
 
-	struct libtorrent_error_category : boost::system::error_category
+	struct libtorrent_error_category final : boost::system::error_category
 	{
 		const char* name() const BOOST_SYSTEM_NOEXCEPT override;
 		std::string message(int ev) const override;
 		boost::system::error_condition default_error_condition(int ev) const BOOST_SYSTEM_NOEXCEPT override
-		{ return boost::system::error_condition(ev, *this); }
+		{ return {ev, *this}; }
 	};
 
 	const char* libtorrent_error_category::name() const BOOST_SYSTEM_NOEXCEPT
@@ -170,9 +175,9 @@ namespace libtorrent {
 			"banned by port filter",
 			"invalid session handle used",
 			"listen socket has been closed",
-			"",
-			"",
-			"",
+			"invalid hash request",
+			"invalid hashes",
+			"invalid hash reject",
 
 // natpmp errors
 			"unsupported protocol version",
@@ -266,8 +271,29 @@ namespace libtorrent {
 			"",
 			"",
 			"",
+#else
+			"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
 #endif
 			"random number generator failed",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+			"",
+
+			"the torrent file has an unknown meta version",
+			"the v2 torrent file has no file tree",
+			"the torrent contains v2 keys but does not specify meta version 2",
+			"the v1 and v2 file metadata does not match",
+			"one or more files are missing piece layer hashes",
+			"a piece layer has the wrong size",
+			"a v2 file entry has no root hash",
+			"v1 and v2 hashes do not describe the same data",
+			"a file in the v2 metadata has the pad attribute set"
 		};
 		if (ev < 0 || ev >= int(sizeof(msgs)/sizeof(msgs[0])))
 			return "Unknown error";
@@ -280,7 +306,7 @@ namespace libtorrent {
 		return libtorrent_category;
 	}
 
-	struct TORRENT_EXPORT http_error_category : boost::system::error_category
+	struct http_error_category final : boost::system::error_category
 	{
 		const char* name() const BOOST_SYSTEM_NOEXCEPT override
 		{ return "http"; }
@@ -314,7 +340,7 @@ namespace libtorrent {
 		}
 		boost::system::error_condition default_error_condition(
 			int ev) const BOOST_SYSTEM_NOEXCEPT override
-		{ return boost::system::error_condition(ev, *this); }
+		{ return {ev, *this}; }
 	};
 
 	boost::system::error_category& http_category()
@@ -328,8 +354,17 @@ namespace libtorrent {
 		// hidden
 		boost::system::error_code make_error_code(error_code_enum e)
 		{
-			return boost::system::error_code(e, libtorrent_category());
+			return {e, libtorrent_category()};
 		}
+	}
+
+	std::string print_error(error_code const& ec)
+	{
+		if (!ec) return {};
+		std::stringstream ret;
+		ret << "ERROR: (" << ec.category().name() << ":" << ec.value() << ") "
+			<< ec.message();
+		return ret.str();
 	}
 
 }

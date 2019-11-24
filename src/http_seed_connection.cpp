@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2019, Arvid Norberg
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2016, 2018, Steven Siloti
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2018, TheOriginalWinCat
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -42,7 +47,7 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	http_seed_connection::http_seed_connection(peer_connection_args const& pack
+	http_seed_connection::http_seed_connection(peer_connection_args& pack
 		, web_seed_t& web)
 		: web_connection_base(pack, web)
 		, m_url(web.url)
@@ -113,11 +118,10 @@ namespace libtorrent {
 		}
 		else
 		{
-			int receive_buffer_size = int(m_recv_buffer.get().size()) - m_parser.body_start();
-			// TODO: 1 in chunked encoding mode, this assert won't hold.
-			// the chunk headers should be subtracted from the receive_buffer_size
-			TORRENT_ASSERT_VAL(receive_buffer_size <= t->block_size(), receive_buffer_size);
-			ret.bytes_downloaded = t->block_size() - receive_buffer_size;
+			int const receive_buffer_size = int(m_recv_buffer.get().size()) - m_parser.body_start();
+			// this is an approximation. in chunked encoding mode the chunk headers
+			// should really be subtracted from the receive_buffer_size
+			ret.bytes_downloaded = std::max(0, t->block_size() - receive_buffer_size);
 		}
 		// this is used to make sure that the block_index stays within
 		// bounds. If the entire piece is downloaded, the block_index
@@ -168,7 +172,7 @@ namespace libtorrent {
 		request += "GET ";
 		request += using_proxy ? m_url : m_path;
 		request += "?info_hash=";
-		request += escape_string({t->torrent_file().info_hash().data(), 20});
+		request += escape_string({associated_info_hash().data(), 20});
 		request += "&piece=";
 		request += to_string(r.piece);
 
@@ -192,7 +196,7 @@ namespace libtorrent {
 		peer_log(peer_log_alert::outgoing_message, "REQUEST", "%s", request.c_str());
 #endif
 
-		send_buffer(request, message_type_request);
+		send_buffer(request);
 	}
 
 	// --------------------------

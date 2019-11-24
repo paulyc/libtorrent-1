@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2004-2019, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016-2017, Steven Siloti
+Copyright (c) 2016, 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -56,6 +59,7 @@ namespace ssl {
 }
 #endif
 
+#include "libtorrent/flags.hpp"
 #include "libtorrent/socket.hpp"
 #include "libtorrent/fwd.hpp"
 #include "libtorrent/address.hpp"
@@ -63,7 +67,7 @@ namespace ssl {
 #include "libtorrent/peer.hpp" // peer_entry
 #include "libtorrent/deadline_timer.hpp"
 #include "libtorrent/union_endpoint.hpp"
-#include "libtorrent/io_service.hpp"
+#include "libtorrent/io_context.hpp"
 #include "libtorrent/span.hpp"
 #include "libtorrent/time.hpp"
 #include "libtorrent/debug.hpp"
@@ -82,43 +86,31 @@ namespace libtorrent {
 #if TORRENT_USE_I2P
 	class i2p_connection;
 #endif
-	namespace aux { struct session_logger; struct session_settings; }
+namespace aux {
+	struct session_logger;
+	struct session_settings;
+}
+
+using tracker_request_flags_t = flags::bitfield_flag<std::uint8_t, struct tracker_request_flags_tag>;
+
+enum class event_t : std::uint8_t
+{
+	none,
+	completed,
+	started,
+	stopped,
+	paused
+};
 
 	struct TORRENT_EXTRA_EXPORT tracker_request
 	{
-		tracker_request()
-			: downloaded(-1)
-			, uploaded(-1)
-			, left(-1)
-			, corrupt(0)
-			, redundant(0)
-			, listen_port(0)
-			, event(none)
-			, kind(announce_request)
-			, key(0)
-			, num_want(0)
-			, private_torrent(false)
-			, triggered_manually(false)
-		{}
+		tracker_request() = default;
 
-		enum event_t
-		{
-			none,
-			completed,
-			started,
-			stopped,
-			paused
-		};
+		static constexpr tracker_request_flags_t scrape_request = 0_bit;
 
-		enum kind_t
-		{
-			// do not compare against announce_request ! check if not scrape instead
-			announce_request = 0,
-			scrape_request = 1,
-			// affects interpretation of peers string in HTTP response
-			// see parse_tracker_response()
-			i2p = 2
-		};
+		// affects interpretation of peers string in HTTP response
+		// see parse_tracker_response()
+		static constexpr tracker_request_flags_t i2p = 1_bit;
 
 		std::string url;
 		std::string trackerid;
@@ -128,21 +120,17 @@ namespace libtorrent {
 
 		std::shared_ptr<const ip_filter> filter;
 
-		std::int64_t downloaded;
-		std::int64_t uploaded;
-		std::int64_t left;
-		std::int64_t corrupt;
-		std::int64_t redundant;
-		std::uint16_t listen_port;
+		std::int64_t downloaded = -1;
+		std::int64_t uploaded = -1;
+		std::int64_t left = -1;
+		std::int64_t corrupt = 0;
+		std::int64_t redundant = 0;
+		std::uint16_t listen_port = 0;
+		event_t event = event_t::none;
+		tracker_request_flags_t kind = {};
 
-		// values from event_t
-		std::uint8_t event;
-
-		// values from kind_t
-		std::uint8_t kind;
-
-		std::uint32_t key;
-		int num_want;
+		std::uint32_t key = 0;
+		int num_want = 0;
 		std::vector<address_v6> ipv6;
 		std::vector<address_v4> ipv4;
 		sha1_hash info_hash;
@@ -152,11 +140,11 @@ namespace libtorrent {
 
 		// set to true if the .torrent file this tracker announce is for is marked
 		// as private (i.e. has the "priv": 1 key)
-		bool private_torrent;
+		bool private_torrent = false;
 
 		// this is set to true if this request was triggered by a "manual" call to
 		// scrape_tracker() or force_reannounce()
-		bool triggered_manually;
+		bool triggered_manually = false;
 
 #ifdef TORRENT_USE_OPENSSL
 		boost::asio::ssl::context* ssl_ctx = nullptr;
@@ -246,7 +234,7 @@ namespace libtorrent {
 	struct TORRENT_EXTRA_EXPORT timeout_handler
 		: std::enable_shared_from_this<timeout_handler>
 	{
-		explicit timeout_handler(io_service& str);
+		explicit timeout_handler(io_context&);
 
 		timeout_handler(timeout_handler const&) = delete;
 		timeout_handler& operator=(timeout_handler const&) = delete;
@@ -259,7 +247,7 @@ namespace libtorrent {
 		virtual void on_timeout(error_code const& ec) = 0;
 		virtual ~timeout_handler();
 
-		io_service& get_io_service() { return m_timeout.get_io_service(); }
+		auto get_executor() { return m_timeout.get_executor(); }
 
 	private:
 
@@ -289,8 +277,8 @@ namespace libtorrent {
 		: timeout_handler
 	{
 		tracker_connection(tracker_manager& man
-			, tracker_request const& req
-			, io_service& ios
+			, tracker_request req
+			, io_context& ios
 			, std::weak_ptr<request_callback> r);
 
 		std::shared_ptr<request_callback> requester() const;
@@ -341,8 +329,8 @@ namespace libtorrent {
 			, span<char const>
 			, error_code&, udp_send_flags_t)>;
 
-		tracker_manager(send_fun_t const& send_fun
-			, send_fun_hostname_t const& send_fun_hostname
+		tracker_manager(send_fun_t send_fun
+			, send_fun_hostname_t send_fun_hostname
 			, counters& stats_counters
 			, resolver_interface& resolver
 			, aux::session_settings const& sett
@@ -357,12 +345,12 @@ namespace libtorrent {
 		tracker_manager& operator=(tracker_manager const&) = delete;
 
 		void queue_request(
-			io_service& ios
+			io_context& ios
 			, tracker_request&& r
 			, std::weak_ptr<request_callback> c
 				= std::weak_ptr<request_callback>());
 		void queue_request(
-			io_service& ios
+			io_context& ios
 			, tracker_request const& r
 			, std::weak_ptr<request_callback> c
 				= std::weak_ptr<request_callback>()) = delete;

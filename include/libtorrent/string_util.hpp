@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2012-2018, Arvid Norberg
+Copyright (c) 2012, 2014-2019, Arvid Norberg
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -64,7 +67,6 @@ namespace libtorrent {
 	TORRENT_EXTRA_EXPORT bool is_space(char c);
 	TORRENT_EXTRA_EXPORT char to_lower(char c);
 
-	TORRENT_EXTRA_EXPORT int split_string(char const** tags, int buf_size, char* in);
 	TORRENT_EXTRA_EXPORT bool string_begins_no_case(char const* s1, char const* s2);
 	TORRENT_EXTRA_EXPORT bool string_equal_no_case(string_view s1, string_view s2);
 
@@ -107,7 +109,7 @@ namespace libtorrent {
 	// strdup is not part of the C standard. Some systems
 	// don't have it and it won't be available when building
 	// in strict ansi mode
-	char* allocate_string_copy(char const* str);
+	char* allocate_string_copy(string_view str);
 
 	// searches for separator ('sep') in the string 'last'.
 	// if found, returns the string_view representing the range from the start of
@@ -122,15 +124,6 @@ namespace libtorrent {
 	TORRENT_EXTRA_EXPORT bool is_i2p_url(std::string const& url);
 
 #endif
-
-	// this can be used as the hash function in std::unordered_*
-	struct TORRENT_EXTRA_EXPORT string_hash_no_case
-	{ size_t operator()(std::string const& s) const; };
-
-	// these can be used as the comparison functions in std::map and std::set
-	struct TORRENT_EXTRA_EXPORT string_eq_no_case
-	{ bool operator()(std::string const& lhs, std::string const& rhs) const; };
-
 }
 
 #endif

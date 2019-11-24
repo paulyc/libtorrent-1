@@ -1,6 +1,10 @@
 /*
 
-Copyright (c) 2007-2018, Arvid Norberg
+Copyright (c) 2007-2019, Arvid Norberg
+Copyright (c) 2015, Thomas Yuan
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016-2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -67,7 +71,7 @@ std::size_t const max_header_size = 25;
 //    the common case cheaper by not allocating this space unconditionally
 struct socks5 : std::enable_shared_from_this<socks5>
 {
-	explicit socks5(io_service& ios)
+	explicit socks5(io_context& ios)
 		: m_socks5_sock(ios)
 		, m_resolver(ios)
 		, m_timer(ios)
@@ -86,7 +90,7 @@ private:
 
 	std::shared_ptr<socks5> self() { return shared_from_this(); }
 
-	void on_name_lookup(error_code const& e, tcp::resolver::iterator i);
+	void on_name_lookup(error_code const& e, tcp::resolver::results_type ips);
 	void on_connect_timeout(error_code const& e);
 	void on_connected(error_code const& e);
 	void handshake1(error_code const& e);
@@ -155,8 +159,9 @@ struct set_dont_frag
 { set_dont_frag(udp::socket&, int) {} };
 #endif
 
-udp_socket::udp_socket(io_service& ios)
+udp_socket::udp_socket(io_context& ios)
 	: m_socket(ios)
+	, m_ioc(ios)
 	, m_buf(new receive_buffer())
 	, m_bind_port(0)
 	, m_abort(true)
@@ -316,7 +321,7 @@ void udp_socket::wrap(udp::endpoint const& ep, span<char const> p
 	, error_code& ec, udp_send_flags_t const flags)
 {
 	TORRENT_UNUSED(flags);
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	std::array<char, max_header_size> header;
 	char* h = header.data();
@@ -340,7 +345,7 @@ void udp_socket::wrap(udp::endpoint const& ep, span<char const> p
 void udp_socket::wrap(char const* hostname, int const port, span<char const> p
 	, error_code& ec, udp_send_flags_t const flags)
 {
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	std::array<char, max_header_size> header;
 	char* h = header.data();
@@ -371,7 +376,7 @@ void udp_socket::wrap(char const* hostname, int const port, span<char const> p
 // forwarded packet
 bool udp_socket::unwrap(udp::endpoint& from, span<char>& buf)
 {
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	// the minimum socks5 header size
 	auto const size = aux::numeric_cast<int>(buf.size());
@@ -492,7 +497,7 @@ void udp_socket::set_proxy_settings(aux::proxy_settings const& ps)
 	{
 		// connect to socks5 server and open up the UDP tunnel
 
-		m_socks5_connection = std::make_shared<socks5>(m_socket.get_io_service());
+		m_socks5_connection = std::make_shared<socks5>(m_ioc);
 		m_socks5_connection->start(ps);
 	}
 }
@@ -504,13 +509,12 @@ void socks5::start(aux::proxy_settings const& ps)
 	m_proxy_settings = ps;
 
 	// TODO: use the system resolver_interface here
-	tcp::resolver::query q(ps.hostname, to_string(ps.port).data());
 	ADD_OUTSTANDING_ASYNC("socks5::on_name_lookup");
-	m_resolver.async_resolve(q, std::bind(
+	m_resolver.async_resolve(ps.hostname, to_string(ps.port).data(), std::bind(
 		&socks5::on_name_lookup, self(), _1, _2));
 }
 
-void socks5::on_name_lookup(error_code const& e, tcp::resolver::iterator i)
+void socks5::on_name_lookup(error_code const& e, tcp::resolver::results_type ips)
 {
 	COMPLETE_ASYNC("socks5::on_name_lookup");
 
@@ -520,6 +524,7 @@ void socks5::on_name_lookup(error_code const& e, tcp::resolver::iterator i)
 
 	if (e) return;
 
+	auto i = ips.begin();
 	m_proxy_addr.address(i->endpoint().address());
 	m_proxy_addr.port(i->endpoint().port());
 
@@ -534,7 +539,7 @@ void socks5::on_name_lookup(error_code const& e, tcp::resolver::iterator i)
 		, std::bind(&socks5::on_connected, self(), _1));
 
 	ADD_OUTSTANDING_ASYNC("socks5::on_connect_timeout");
-	m_timer.expires_from_now(seconds(10));
+	m_timer.expires_after(seconds(10));
 	m_timer.async_wait(std::bind(&socks5::on_connect_timeout
 		, self(), _1));
 }
@@ -564,7 +569,7 @@ void socks5::on_connected(error_code const& e)
 	// we failed to connect to the proxy
 	if (e) return;
 
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	// send SOCKS5 authentication methods
 	char* p = m_tmp_buf.data();
@@ -606,7 +611,7 @@ void socks5::handshake2(error_code const& e)
 
 	if (e) return;
 
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	char* p = m_tmp_buf.data();
 	int const version = read_uint8(p);
@@ -672,7 +677,7 @@ void socks5::handshake4(error_code const& e)
 	if (m_abort) return;
 	if (e) return;
 
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	char* p = m_tmp_buf.data();
 	int const version = read_uint8(p);
@@ -685,7 +690,7 @@ void socks5::handshake4(error_code const& e)
 
 void socks5::socks_forward_udp()
 {
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	// send SOCKS5 UDP command
 	char* p = m_tmp_buf.data();
@@ -720,7 +725,7 @@ void socks5::connect2(error_code const& e)
 	if (m_abort) return;
 	if (e) return;
 
-	using namespace libtorrent::detail;
+	using namespace libtorrent::aux;
 
 	char* p = m_tmp_buf.data();
 	int const version = read_uint8(p); // VERSION
@@ -759,7 +764,7 @@ void socks5::hung_up(error_code const& e)
 	if (e == boost::asio::error::operation_aborted || m_abort) return;
 
 	// the socks connection was closed, re-open it in a bit
-	m_retry_timer.expires_from_now(seconds(5));
+	m_retry_timer.expires_after(seconds(5));
 	m_retry_timer.async_wait(std::bind(&socks5::retry_socks_connect
 		, self(), _1));
 }

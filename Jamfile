@@ -8,6 +8,7 @@ import errors ;
 import feature : feature ;
 import package ;
 import virtual-target ;
+import cast ;
 
 BOOST_ROOT = [ modules.peek : BOOST_ROOT ] ;
 CXXFLAGS = [ modules.peek : CXXFLAGS ] ;
@@ -27,23 +28,26 @@ if $(BOOST_ROOT)
 else
 {
 	local boost-lib-search-path =
-		<search>/usr/local/lib
+		<search>/usr/local/opt/boost/lib
 		;
 
 	local boost-include-path =
-		<include>/usr/local/include
-		<include>/usr/sfw/include
+		<include>/usr/local/opt/boost/include
 	;
 
-	# the names are decorated in MacPorts
+	# the names are decorated in MacPorts.
 	lib boost_system : : <target-os>darwin <name>boost_system-mt $(boost-lib-search-path)
 		: : $(boost-include-path) ;
 
-	lib boost_system : : <name>boost_system $(boost-lib-search-path)
-		: : $(boost-include-path) ;
+	# we can't add /usr/local/lib to the search path on mac, as that will
+	# interfere with system libraries (specifically libjpeg)
+	lib boost_system : : <name>boost_system $(boost-lib-search-path) <search>/usr/local/lib
+		: : $(boost-include-path) <include>/usr/local/include ;
 }
 
-VERSION = 1.2.0 ;
+use-project /try_signal : ./deps/try_signal ;
+
+VERSION = 2.0.0 ;
 
 rule linking ( properties * )
 {
@@ -70,6 +74,10 @@ rule linking ( properties * )
 	{
 		result += <library>ssl ;
 		result += <library>crypto ;
+		if <target-os>linux in $(properties)
+		{
+			result += <library>dl ;
+		}
 	}
 	else if <crypto>libcrypto in $(properties)
 	{
@@ -94,6 +102,12 @@ rule linking ( properties * )
 		if ! <dht>off in $(properties)
 		{
 			result += <library>advapi32 ;
+		}
+
+		# windows xp has no CNG
+		if ! <windows-version>xp in $(properties)
+		{
+			result += <library>bcrypt ;
 		}
 	}
 
@@ -180,6 +194,15 @@ rule linking ( properties * )
 		<define>BOOST_SYSTEM_NO_DEPRECATED
 		;
 
+	if <link>shared in $(properties)
+	{
+		result += <library>/try_signal//try_signal/<link>static/<fpic>on ;
+	}
+	else
+	{
+		result += <library>/try_signal//try_signal/<link>static ;
+	}
+
 	return $(result) ;
 }
 
@@ -206,6 +229,9 @@ rule warnings ( properties * )
 
 # enable these warnings again, once the other ones are dealt with
 		result += <cflags>-Wno-weak-vtables ;
+
+		result += <cflags>-Wno-return-std-move-in-c++11 ;
+		result += <cflags>-Wno-unknown-warning-option ;
 	}
 
 	if <toolset>gcc in $(properties)
@@ -218,6 +244,7 @@ rule warnings ( properties * )
 		result += <cflags>-Wvla ;
 		result += <cxxflags>-Wc++11-compat ;
 		result += <cflags>-Wno-format-zero-length ;
+		result += <cflags>-Wno-noexcept-type ;
 	}
 
 	if <toolset>msvc in $(properties)
@@ -256,18 +283,17 @@ rule building ( properties * )
 		result += <build>no ;
 	}
 
+	local VERSION = [ feature.get-values <cxxstd> : $(properties) ] ;
+	if ! $(VERSION) || $(VERSION) < 14
+	{
+		ECHO "libtorrent requires at least C++14. Specify <cxxstd>14 or higher" ;
+		result += <build>no ;
+	}
+
 	if <toolset>msvc in $(properties)
 	{
 		# allow larger .obj files (with more sections)
 		result += <cflags>/bigobj ;
-	}
-
-	if ( <variant>debug in $(properties)
-		&& ( <toolset>clang in $(properties)
-			|| <toolset>gcc in $(properties)
-			|| <toolset>darwin in $(properties) ) )
-	{
-		result += <cflags>-ftrapv ;
 	}
 
 	if ( <asserts>production in $(properties)
@@ -281,28 +307,10 @@ rule building ( properties * )
 		result += <source>src/pe_crypto.cpp ;
 	}
 
-	if <crypto>built-in in $(properties)
-		&& ! <target-os>windows in $(properties)
-		&& ! <target-os>darwin in $(properties)
-	{
-		result += <source>src/sha1.cpp ;
-		if <dht>on in $(properties)
-		{
-			result += <source>src/sha512.cpp ;
-		}
-	}
-
-	if <target-os>windows in $(properties)
-		&& <windows-version>xp in $(properties)
-	{
-		result += <source>src/sha512.cpp ;
-	}
-
 	if ( <toolset>darwin in $(properties)
 		|| <toolset>gcc in $(properties)
 		|| <toolset>clang in $(properties)
 		|| <toolset>clang-darwin in $(properties) )
-		&& <link>shared in $(properties)
 		# on GCC, enabling debugging in libstdc++
 		# breaks the ABI and its ability to appear
 		# in shared object interfaces, so when it's
@@ -320,17 +328,6 @@ rule building ( properties * )
 		}
 	}
 
-	return $(result) ;
-}
-
-rule default-build ( properties * )
-{
-	local result ;
-	if <variant>debug in $(properties)
-	{
-		result += <variant>debug:<invariant-checks>on
-			<variant>debug:<asserts>on ;
-	}
 	return $(result) ;
 }
 
@@ -359,20 +356,13 @@ rule openssl-lib-path ( properties * )
 		# brew install openssl
 		OPENSSL_LIB = /usr/local/opt/openssl/lib ;
 	}
-	else if <target-os>windows in $(properties)
-		&& <toolset>gcc in $(properties)
-		&& $(OPENSSL_LIB) = ""
-	{
-		# on mingw, assume openssl is installed in c:\OpenSSL-Win32 by default
-		OPENSSL_LIB = c:\\OpenSSL-Win32\\lib ;
-	}
 	else if <target-os>windows in $(properties) && $(OPENSSL_LIB) = ""
 	{
-		# on windows, just assume openssl is installed to c:\openssl
+		# on windows, assume openssl is installed to c:\OpenSSL-Win32
 		if <address-model>64 in $(properties)
-		{ OPENSSL_LIB = c:\\openssl\\lib64 ; }
+		{ OPENSSL_LIB = c:\\OpenSSL-Win64\\lib ; }
 		else
-		{ OPENSSL_LIB = c:\\openssl\\lib ; }
+		{ OPENSSL_LIB = c:\\OpenSSL-Win32\\lib ; }
 	}
 
 	local result ;
@@ -392,21 +382,13 @@ rule openssl-include-path ( properties * )
 		# brew install openssl
 		OPENSSL_INCLUDE = /usr/local/opt/openssl/include ;
 	}
-	else if <target-os>windows in $(properties)
-		&& <toolset>gcc in $(properties)
-		&& $(OPENSSL_INCLUDE) = ""
-	{
-		# on mingw, assume openssl is installed in c:\OpenSSL-Win32 by default
-		OPENSSL_INCLUDE = c:\\OpenSSL-Win32\\include ;
-	}
 	else if <target-os>windows in $(properties) && $(OPENSSL_INCLUDE) = ""
 	{
-		# on windows, just assume openssl is installed to c:\openssl
-		# not sure if there's a better way to find out where it may be
+		# on windows, assume openssl is installed to c:\OpenSSL-Win32
 		if <address-model>64 in $(properties)
-		{ OPENSSL_INCLUDE = c:\\openssl\\include64 ; }
+		{ OPENSSL_INCLUDE = c:\\OpenSSL-Win64\\include ; }
 		else
-		{ OPENSSL_INCLUDE = c:\\openssl\\include ; }
+		{ OPENSSL_INCLUDE = c:\\OpenSSL-Win32\\include ; }
 	}
 
 	local result ;
@@ -414,17 +396,65 @@ rule openssl-include-path ( properties * )
 	return $(result) ;
 }
 
+path-constant blacklist-file : tools/sanitizer-blacklist.txt ;
+
+rule sanitizer-options ( properties * )
+{
+	local result ;
+	if <sanitize>on in $(properties)
+	{
+		local sanitizers ;
+		local extra ;
+		local flags ;
+   
+		# sanitize is a clang and GCC feature
+		if <toolset>clang in $(properties)
+		{
+			local version = [ feature.get-values <toolset-clang:version> : $(properties) ] ;
+			# implicit-conversion sanitizer was added in clang-7
+			if $(version) >= 7.0 {
+				sanitizers += address,undefined,leak,implicit-conversion ;
+			}
+			else {
+				sanitizers += address,undefined,leak ;
+			}
+			extra = <cflags>-fsanitize-blacklist=$(blacklist-file) ;
+			flags = -fsanitize=$(sanitizers) -fno-sanitize-recover=all ;
+		}
+		# sanitizers are not available on windows (mingw)
+		else if <toolset>gcc in $(properties) && ! <target-os>windows in $(properties)
+		{
+			local version = [ feature.get-values <toolset-gcc:version> : $(properties) ] ;
+			if $(version) >= 7.0 {
+				extra = <cflags>-fsanitize-address-use-after-scope ;
+			}
+			if $(version) >= 5.0 {
+				sanitizers = address,undefined,leak ;
+				flags = -fsanitize=$(sanitizers) -fno-sanitize-recover=all ;
+			}
+		}
+		else if <toolset>darwin in $(properties)
+		{
+			# apple's compiler is typically an old version of clang
+			sanitizers = address,undefined ;
+			flags = -fsanitize=$(sanitizers) -fno-sanitize-recover=all ;
+		}
+
+		result = <cflags>$(flags) <linkflags>$(flags) $(extra) ;
+	}
+	return $(result) ;
+}
+
 feature openssl-lib : : free path ;
 feature openssl-include : : free path ;
 
-feature sanitize : off address memory undefined thread rtc : composite propagated link-incompatible ;
-# sanitize is a clang and GCC feature
-feature.compose <sanitize>undefined : <cflags>-fsanitize=undefined <cflags>-fsanitize-undefined-trap-on-error <linkflags>-fsanitize=undefined <linkflags>-fsanitize-undefined-trap-on-error ;
-feature.compose <sanitize>thread : <cflags>-fsanitize=thread <linkflags>-fsanitize=thread ;
-feature.compose <sanitize>address : <cflags>-fsanitize=address <linkflags>-fsanitize=address ;
-feature.compose <sanitize>memory : <cflags>-fsanitize=memory <linkflags>-fsanitize=memory ;
+feature sanitize : off rtc on : composite propagated link-incompatible ;
+
 # RTC (runtime check) is an msvc feature
 feature.compose <sanitize>rtc : <cflags>/RTCc <cflags>/RTCsu ;
+
+feature test-coverage : off on : composite propagated link-incompatible ;
+feature.compose <test-coverage>on : <cflags>--coverage <linkflags>--coverage ;
 
 feature i2p : on off : composite propagated ;
 feature.compose <i2p>on : <define>TORRENT_USE_I2P=1 ;
@@ -452,6 +482,9 @@ feature.compose <asio-debugging>on : <define>TORRENT_ASIO_DEBUGGING ;
 
 feature picker-debugging : off on : composite propagated link-incompatible ;
 feature.compose <picker-debugging>on : <define>TORRENT_DEBUG_REFCOUNTS ;
+
+feature mmap-disk-io : on off : composite propagated ;
+feature.compose <mmap-disk-io>off : <define>TORRENT_HAVE_MMAP=0 ;
 
 feature simulator : off on : composite propagated link-incompatible ;
 feature.compose <simulator>on : <define>TORRENT_BUILD_SIMULATOR ;
@@ -495,8 +528,7 @@ feature boost-link : default static shared : propagated composite ;
 # constructors on some containers when enabling debug iterators, so it's
 # possible to turn them off
 feature debug-iterators : default off on : composite propagated link-incompatible ;
-feature.compose <debug-iterators>on : <define>_ITERATOR_DEBUG_LEVEL=2 <define>_GLIBCXX_DEBUG
-	<define>_GLIBCXX_DEBUG_PEDANTIC ;
+feature.compose <debug-iterators>on : <define>_GLIBCXX_DEBUG <define>_GLIBCXX_DEBUG_PEDANTIC ;
 feature.compose <debug-iterators>off : <define>_ITERATOR_DEBUG_LEVEL=0 ;
 
 feature fpic : off on : composite propagated link-incompatible ;
@@ -545,6 +577,7 @@ lib advapi32 : : <name>advapi32 ;
 lib user32 : : <name>user32 ;
 lib shell32 : : <name>shell32 ;
 lib gdi32 : : <name>gdi32 ;
+lib bcrypt : : <name>bcrypt ;
 lib z : : <link>shared <name>z ;
 
 # openssl libraries on windows
@@ -557,9 +590,9 @@ lib ssl : ssl-deps : <target-os>windows <openssl-version>pre1.1 <name>ssleay32
 	<use>crypto <conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
 
 # OpenSSL 1.1+ windows
-lib crypto : ssl-deps : <target-os>windows <name>libcrypto
+lib crypto : ssl-deps : <toolset>msvc <openssl-version>1.1 <name>libcrypto
 	<conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
-lib ssl : ssl-deps : <target-os>windows <name>libssl <use>crypto
+lib ssl : ssl-deps : <toolset>msvc <openssl-version>1.1 <name>libssl <use>crypto
 	<conditional>@openssl-lib-path : : <conditional>@openssl-include-path ;
 
 # generic OpenSSL
@@ -600,7 +633,6 @@ SOURCES =
 	bandwidth_queue_entry
 	bdecode
 	bitfield
-	block_cache
 	bloom_filter
 	chained_buffer
 	choker
@@ -610,9 +642,11 @@ SOURCES =
 	create_torrent
 	disk_buffer_holder
 	disk_buffer_pool
+	disk_interface
 	disk_io_job
 	disk_io_thread
 	disk_io_thread_pool
+	disabled_disk_io
 	disk_job_fence
 	disk_job_pool
 	entry
@@ -625,9 +659,9 @@ SOURCES =
 	fingerprint
 	gzip
 	hasher
+	hash_picker
 	hex
 	http_connection
-	http_stream
 	http_parser
 	identify_client
 	ip_filter
@@ -662,13 +696,14 @@ SOURCES =
 	session_call
 	session_udp_sockets
 	settings_pack
+	sha1
 	sha1_hash
+	sha256
 	socket_io
 	socket_type
 	socks5_stream
 	stat
 	storage
-	storage_piece_set
 	storage_utils
 	torrent
 	torrent_handle
@@ -686,7 +721,7 @@ SOURCES =
 	utf8
 	utp_socket_manager
 	utp_stream
-	file_pool
+	file_view_pool
 	lsd
 	enum_net
 	broadcast_socket
@@ -711,6 +746,9 @@ SOURCES =
 	peer_info
 	stack_allocator
 	generate_peer_id
+	mmap
+	posix_disk_io
+	posix_storage
 
 # -- extensions --
 	ut_pex
@@ -750,6 +788,8 @@ ED25519_SOURCES =
 	sc
 	sign
 	verify
+	hasher512
+	sha512
 	;
 
 local usage-requirements =
@@ -765,7 +805,9 @@ local usage-requirements =
 	<define>BOOST_ASIO_ENABLE_CANCELIO
 # make sure asio uses std::chrono
 	<define>BOOST_ASIO_HAS_STD_CHRONO
+	<define>BOOST_ASIO_NO_DEPRECATED
 	<conditional>@linking
+	<conditional>@sanitizer-options
 # msvc optimizations
 	<toolset>msvc,<variant>release:<linkflags>"/OPT:ICF=5"
 	<toolset>msvc,<variant>release:<linkflags>"/OPT:REF"
@@ -794,8 +836,7 @@ lib torrent
 	<link>shared:<define>BOOST_SYSTEM_SOURCE
 
 	<dht>on:<source>src/kademlia/$(KADEMLIA_SOURCES).cpp
-	<dht>on:<source>ed25519/src/$(ED25519_SOURCES).cpp
-	<dht>on:<source>src/hasher512.cpp
+	<dht>on:<source>src/ed25519/$(ED25519_SOURCES).cpp
 
 	<conditional>@building
 	<conditional>@warnings
@@ -808,7 +849,6 @@ lib torrent
 	: # default build
 	<threading>multi
 	<c++-template-depth>512
-	<conditional>@default-build
 
 	: # usage requirements
 	$(usage-requirements)
@@ -824,3 +864,21 @@ package.install install
 	: torrent
 	: $(headers)
 	;
+
+local header_targets ;
+for local target in $(headers)
+{
+	if ! [ path.basename $(target) ] in windows.hpp win_util.hpp win_crypto_provider.hpp torrent_impl.hpp cppint_import_export.hpp io_service.hpp
+	{
+		# this cast tells boost build that the header files really *are* cpp files
+		# otherwise the object rule doesn't know which language to interpret them as
+		obj header-build/$(target).o : [ cast.cast _ cpp : $(target) ]
+			: <library>/torrent <cxxflags>-fsyntax-only
+			: <cxxstd>14 ;
+		explicit header-build/$(target).o ;
+		header_targets += $(target) ;
+	}
+}
+
+alias check-headers : header-build/$(header_targets).o ;
+explicit check-headers ;

@@ -22,6 +22,7 @@
 #include <libtorrent/session_stats.hpp>
 #include <libtorrent/session_status.hpp>
 #include <libtorrent/peer_class_type_filter.hpp>
+#include <libtorrent/torrent_status.hpp>
 
 #include <libtorrent/extensions/smart_ban.hpp>
 #include <libtorrent/extensions/ut_metadata.hpp>
@@ -217,7 +218,7 @@ namespace
         , storage_mode_t storage_mode, bool paused)
     {
         allow_threading_guard guard;
-        return s.add_torrent(ti, save, resume, storage_mode, paused, default_storage_constructor);
+        return s.add_torrent(ti, save, resume, storage_mode, paused);
     }
 #endif
 #endif
@@ -247,8 +248,16 @@ namespace
             }
             else if(key == "info_hash")
             {
-                p.info_hash = sha1_hash(
-                bytes(extract<bytes>(value)).arr.data());
+                if (boost::python::len(value) == sha1_hash::size())
+                {
+                    p.info_hash = info_hash_t(sha1_hash(
+                            bytes(extract<bytes>(value)).arr.data()));
+                }
+                else if (boost::python::len(value) == sha256_hash::size())
+                {
+                    p.info_hash = info_hash_t(sha256_hash(
+                            bytes(extract<bytes>(value)).arr.data()));
+                }
                 continue;
             }
             else if(key == "name")
@@ -266,11 +275,6 @@ namespace
             {
                 std::string resume = extract<std::string>(value);
                 p.resume_data.assign(resume.begin(), resume.end());
-                continue;
-            }
-            else if(key == "uuid")
-            {
-                p.uuid = extract<std::string>(value);
                 continue;
             }
 #endif
@@ -421,57 +425,53 @@ namespace
 
     list get_torrents(lt::session& s)
     {
-        list ret;
         std::vector<torrent_handle> torrents;
         {
            allow_threading_guard guard;
            torrents = s.get_torrents();
         }
 
+        list ret;
         for (std::vector<torrent_handle>::iterator i = torrents.begin(); i != torrents.end(); ++i)
-        {
             ret.append(*i);
-        }
         return ret;
     }
 
-    cache_status get_cache_info1(lt::session& s, torrent_handle h, int flags)
+    bool wrap_pred(object pred, torrent_status const& st)
     {
-       cache_status ret;
-       s.get_cache_info(&ret, h, flags);
-       return ret;
+        return pred(st);
     }
 
-    list cached_piece_info_list(std::vector<cached_piece_info> const& v)
+    list get_torrent_status(lt::session& s, object pred, int const flags)
     {
-       list pieces;
-       time_point now = clock_type::now();
-       for (std::vector<cached_piece_info>::const_iterator i = v.begin()
-          , end(v.end()); i != end; ++i)
-       {
-          dict d;
-          d["piece"] = i->piece;
-          d["last_use"] = total_milliseconds(now - i->last_use) / 1000.f;
-          d["next_to_hash"] = i->next_to_hash;
-          d["kind"] = static_cast<int>(i->kind);
-          pieces.append(d);
-       }
-       return pieces;
+        std::vector<torrent_status> torrents
+            = s.get_torrent_status(boost::bind(&wrap_pred, pred, _1), status_flags_t(flags));
+
+        list ret;
+        for (std::vector<torrent_status>::iterator i = torrents.begin(); i != torrents.end(); ++i)
+            ret.append(*i);
+        return ret;
     }
 
-    list cache_status_pieces(cache_status const& cs)
+    list refresh_torrent_status(lt::session& s, list in_torrents, int const flags)
     {
-        return cached_piece_info_list(cs.pieces);
+        std::vector<torrent_status> torrents;
+        int const n = int(boost::python::len(in_torrents));
+        for (int i = 0; i < n; ++i)
+           torrents.push_back(extract<torrent_status>(in_torrents[i]));
+
+        {
+           allow_threading_guard guard;
+           s.refresh_torrent_status(&torrents, status_flags_t(flags));
+        }
+
+        list ret;
+        for (std::vector<torrent_status>::iterator i = torrents.begin(); i != torrents.end(); ++i)
+            ret.append(*i);
+        return ret;
     }
 
 #if TORRENT_ABI_VERSION == 1
-    cache_status get_cache_status(lt::session& s)
-    {
-       cache_status ret;
-       s.get_cache_info(&ret);
-       return ret;
-    }
-
     dict get_utp_stats(session_status const& st)
     {
         dict ret;
@@ -481,18 +481,6 @@ namespace
         ret["num_fin_sent"] = st.utp_stats.num_fin_sent;
         ret["num_close_wait"] = st.utp_stats.num_close_wait;
         return ret;
-    }
-
-    list get_cache_info2(lt::session& ses, sha1_hash ih)
-    {
-       std::vector<cached_piece_info> ret;
-
-       {
-          allow_threading_guard guard;
-          ses.get_cache_info(ih, ret);
-       }
-
-       return cached_piece_info_list(ret);
     }
 #endif
 
@@ -795,12 +783,13 @@ void bind_session()
         .add_property("have_pieces", PROP(&add_torrent_params::have_pieces))
         .add_property("verified_pieces", PROP(&add_torrent_params::verified_pieces))
         .add_property("piece_priorities", PROP(&add_torrent_params::piece_priorities))
+#if TORRENT_ABI_VERSION <= 2
         .add_property("merkle_tree", PROP(&add_torrent_params::merkle_tree))
+#endif
         .add_property("renamed_files", PROP(&add_torrent_params::renamed_files))
 
 #if TORRENT_ABI_VERSION == 1
         .def_readwrite("url", &add_torrent_params::url)
-        .def_readwrite("uuid", &add_torrent_params::uuid)
         .add_property("resume_data", PROP(&add_torrent_params::resume_data))
 #endif
       ;
@@ -818,7 +807,9 @@ void bind_session()
     {
         scope s = class_<dummy10>("session_flags_t");
         s.attr("add_default_plugins") = lt::session::add_default_plugins;
+#if TORRENT_ABI_VERSION == 1
         s.attr("start_default_features") = lt::session::start_default_features;
+#endif
     }
 
     {
@@ -836,6 +827,9 @@ void bind_session()
     s.attr("stop_when_ready") = torrent_flags::stop_when_ready;
     s.attr("override_trackers") = torrent_flags::override_trackers;
     s.attr("override_web_seeds") = torrent_flags::override_web_seeds;
+    s.attr("disable_dht") = torrent_flags::disable_dht;
+    s.attr("disable_lsd") = torrent_flags::disable_lsd;
+    s.attr("disable_pex") = torrent_flags::disable_pex;
     s.attr("default_flags") = torrent_flags::default_flags;
     }
 
@@ -862,43 +856,6 @@ void bind_session()
     s.attr("flag_merge_resume_http_seeds") = add_torrent_params::flag_merge_resume_http_seeds;
     s.attr("default_flags") = add_torrent_params::flag_default_flags;
     }
-#endif
-
-    class_<cache_status>("cache_status")
-        .add_property("pieces", cache_status_pieces)
-#if TORRENT_ABI_VERSION == 1
-        .def_readonly("blocks_written", &cache_status::blocks_written)
-        .def_readonly("writes", &cache_status::writes)
-        .def_readonly("blocks_read", &cache_status::blocks_read)
-        .def_readonly("blocks_read_hit", &cache_status::blocks_read_hit)
-        .def_readonly("reads", &cache_status::reads)
-        .def_readonly("queued_bytes", &cache_status::queued_bytes)
-        .def_readonly("cache_size", &cache_status::cache_size)
-        .def_readonly("write_cache_size", &cache_status::write_cache_size)
-        .def_readonly("read_cache_size", &cache_status::read_cache_size)
-        .def_readonly("pinned_blocks", &cache_status::pinned_blocks)
-        .def_readonly("total_used_buffers", &cache_status::total_used_buffers)
-        .def_readonly("average_read_time", &cache_status::average_read_time)
-        .def_readonly("average_write_time", &cache_status::average_write_time)
-        .def_readonly("average_hash_time", &cache_status::average_hash_time)
-        .def_readonly("average_job_time", &cache_status::average_job_time)
-        .def_readonly("cumulative_job_time", &cache_status::cumulative_job_time)
-        .def_readonly("cumulative_read_time", &cache_status::cumulative_read_time)
-        .def_readonly("cumulative_write_time", &cache_status::cumulative_write_time)
-        .def_readonly("cumulative_hash_time", &cache_status::cumulative_hash_time)
-        .def_readonly("total_read_back", &cache_status::total_read_back)
-        .def_readonly("read_queue_size", &cache_status::read_queue_size)
-        .def_readonly("blocked_jobs", &cache_status::blocked_jobs)
-        .def_readonly("queued_jobs", &cache_status::queued_jobs)
-        .def_readonly("peak_queued", &cache_status::peak_queued)
-        .def_readonly("pending_jobs", &cache_status::pending_jobs)
-        .def_readonly("num_jobs", &cache_status::num_jobs)
-        .def_readonly("num_read_jobs", &cache_status::num_read_jobs)
-        .def_readonly("num_write_jobs", &cache_status::num_write_jobs)
-        .def_readonly("arc_mru_size", &cache_status::arc_mru_size)
-        .def_readonly("arc_mru_ghost_size", &cache_status::arc_mru_ghost_size)
-        .def_readonly("arc_mfu_size", &cache_status::arc_mfu_size)
-        .def_readonly("arc_mfu_ghost_size", &cache_status::arc_mfu_ghost_size)
 #endif
     ;
 
@@ -942,8 +899,7 @@ void bind_session()
         .def("__init__", boost::python::make_constructor(&make_session
                 , default_call_policies()
                 , (arg("settings")
-                , arg("flags")=lt::session::start_default_features
-                    | lt::session::add_default_plugins))
+                , arg("flags")=lt::session::add_default_plugins))
         )
 #if TORRENT_ABI_VERSION == 1
         .def(
@@ -968,8 +924,10 @@ void bind_session()
         )
 #endif // TORRENT_ABI_VERSION
         .def("is_dht_running", allow_threads(&lt::session::is_dht_running))
+#if TORRENT_ABI_VERSION <= 2
         .def("set_dht_settings", allow_threads(&lt::session::set_dht_settings))
         .def("get_dht_settings", allow_threads(&lt::session::get_dht_settings))
+#endif
         .def("dht_get_immutable_item", allow_threads(dht_get_immutable_item))
         .def("dht_get_mutable_item", &dht_get_mutable_item)
         .def("dht_put_immutable_item", allow_threads(dht_put_immutable_item))
@@ -1021,10 +979,11 @@ void bind_session()
         .def("get_ip_filter", allow_threads(&lt::session::get_ip_filter))
         .def("find_torrent", allow_threads(&lt::session::find_torrent))
         .def("get_torrents", &get_torrents)
+        .def("get_torrent_status", &get_torrent_status, (arg("session"), arg("pred"), arg("flags") = 0))
+        .def("refresh_torrent_status", &refresh_torrent_status, (arg("session"), arg("torrents"), arg("flags") = 0))
         .def("pause", allow_threads(&lt::session::pause))
         .def("resume", allow_threads(&lt::session::resume))
         .def("is_paused", allow_threads(&lt::session::is_paused))
-        .def("get_cache_info", &get_cache_info1, (arg("handle") = torrent_handle(), arg("flags") = 0))
         .def("add_port_mapping", allow_threads(&lt::session::add_port_mapping))
         .def("delete_port_mapping", allow_threads(&lt::session::delete_port_mapping))
         .def("reopen_network_sockets", allow_threads(&lt::session::reopen_network_sockets))
@@ -1079,8 +1038,6 @@ void bind_session()
         .def("stop_lsd", allow_threads(&lt::session::stop_lsd))
         .def("start_natpmp", &start_natpmp)
         .def("stop_natpmp", allow_threads(&lt::session::stop_natpmp))
-        .def("get_cache_status", &get_cache_status)
-        .def("get_cache_info", &get_cache_info2)
         .def("set_peer_id", allow_threads(&lt::session::set_peer_id))
 #endif // TORRENT_ABI_VERSION
         ;
@@ -1106,7 +1063,9 @@ void bind_session()
     {
         scope s = class_<dummy9>("save_state_flags_t");
         s.attr("save_settings") = lt::session::save_settings;
+#if TORRENT_ABI_VERSION <= 2
         s.attr("save_dht_settings") = lt::session::save_dht_settings;
+#endif
         s.attr("save_dht_state") = lt::session::save_dht_state;
 #if TORRENT_ABI_VERSION == 1
         s.attr("save_encryption_settings") = lt::session:: save_encryption_settings;

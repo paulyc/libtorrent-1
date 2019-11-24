@@ -43,6 +43,7 @@ dict
 kiB
 MiB
 DHT
+LSD
 adler32
 LRU
 LRUs
@@ -76,6 +77,7 @@ kB
 hostname
 indices
 dht
+lsd
 noseed
 BFpe
 BFsd
@@ -84,6 +86,7 @@ async
 uTorrent
 pred
 sha1
+sha512
 pread
 preadv
 pwrite
@@ -296,6 +299,7 @@ DLL
 gettime
 toolsets
 libgcrypt
+LibTomCrypt
 CommonCrypto
 cygwin
 gcc
@@ -429,8 +433,6 @@ leechers
 printability
 podcasts
 todo
-
-
 0x10
 0x41727101980
 0x7fffffffffffffff
@@ -464,3 +466,15 @@ txt
 un
 v12
 v2
+fuzzers
+fuzzer
+libFuzzer
+clang's
+prev
+mmap
+hash2
+infohash
+v1
+Dreik's
+ctx
+destructors

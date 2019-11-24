@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2013, Arvid Norberg
+Copyright (c) 2013-2019, Arvid Norberg
+Copyright (c) 2017-2018, Steven Siloti
+Copyright (c) 2018, d-komarov
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -101,8 +104,7 @@ void test_checking(int flags)
 
 	create_random_files("test_torrent_dir", file_sizes, &fs);
 
-	lt::create_torrent t(fs, piece_size, 0x4000
-		, lt::create_torrent::optimize_alignment);
+	lt::create_torrent t(fs, piece_size);
 
 	// calculate the hash for all pieces
 	set_piece_hashes(t, ".", ec);
@@ -114,7 +116,7 @@ void test_checking(int flags)
 	auto ti = std::make_shared<torrent_info>(buf, ec, from_span);
 
 	std::printf("generated torrent: %s test_torrent_dir\n"
-		, aux::to_hex(ti->info_hash()).c_str());
+		, aux::to_hex(ti->info_hash().v1).c_str());
 
 	// truncate every file in half
 	if (flags & incomplete_files)
@@ -128,7 +130,7 @@ void test_checking(int flags)
 			std::string path = combine_path("test_torrent_dir", dirname);
 			path = combine_path(path, name);
 
-			file f(path, open_mode::read_write, ec);
+			file f(path, aux::open_mode::write, ec);
 			if (ec) std::printf("ERROR: opening file \"%s\": (%d) %s\n"
 				, path.c_str(), ec.value(), ec.message().c_str());
 			f.set_size(file_sizes[i] / 2, ec);
@@ -320,14 +322,14 @@ TORRENT_TEST(discrete_checking)
 	create_random_files("test_torrent_dir", file_sizes, &fs);
 	TEST_EQUAL(fs.num_files(), 2);
 
-	lt::create_torrent t(fs, piece_size, 1, lt::create_torrent::optimize_alignment);
+	lt::create_torrent t(fs, piece_size);
 	set_piece_hashes(t, ".", ec);
 	if (ec) printf("ERROR: set_piece_hashes: (%d) %s\n", ec.value(), ec.message().c_str());
 
 	std::vector<char> buf;
 	bencode(std::back_inserter(buf), t.generate());
 	auto ti = std::make_shared<torrent_info>(buf, ec, from_span);
-	printf("generated torrent: %s test_torrent_dir\n", aux::to_hex(ti->info_hash().to_string()).c_str());
+	printf("generated torrent: %s test_torrent_dir\n", aux::to_hex(ti->info_hash().v1.to_string()).c_str());
 
 	// we have two files, but there's a padfile now too
 	TEST_EQUAL(ti->num_files(), 3);

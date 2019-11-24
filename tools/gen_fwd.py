@@ -67,8 +67,12 @@ def print_classes(out, classes, keyword):
     # also ignore any header in the aux_ directory, those are private
     classes = [l for l in classes if l[0].endswith('.hpp') and not l[0].endswith('/fwd.hpp') and '/aux_/' not in l[0]]
 
-    namespaces = ['TORRENT_VERSION_NAMESPACE_2',
-                  'TORRENT_VERSION_NAMESPACE_2_END']
+    namespaces = ['TORRENT_VERSION_NAMESPACE_3',
+                  'TORRENT_VERSION_NAMESPACE_3_END',
+                  'TORRENT_VERSION_NAMESPACE_2',
+                  'TORRENT_VERSION_NAMESPACE_2_END',
+                  'TORRENT_CRYPTO_NAMESPACE',
+                  'TORRENT_CRYPTO_NAMESPACE_END']
 
     # only include classes with the right kind of export
     classes = [
@@ -125,7 +129,7 @@ with open('include/libtorrent/fwd.hpp', 'w+') as f:
 
     print_classes(f, classes, 'TORRENT_EXPORT')
 
-    f.write('\n#if TORRENT_ABI_VERSION == 1\n')
+    f.write('\n#if TORRENT_ABI_VERSION <= 2\n')
 
     print_classes(f, classes, 'TORRENT_DEPRECATED_EXPORT')
 

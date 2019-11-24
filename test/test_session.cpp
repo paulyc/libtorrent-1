@@ -1,6 +1,8 @@
 /*
 
-Copyright (c) 2013, Arvid Norberg
+Copyright (c) 2013-2019, Arvid Norberg
+Copyright (c) 2017-2018, Alden Torres
+Copyright (c) 2018, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -109,7 +111,7 @@ TORRENT_TEST(async_add_torrent_duplicate_error)
 	lt::session ses(p);
 
 	add_torrent_params atp;
-	atp.info_hash.assign("abababababababababab");
+	atp.info_hash.v1.assign("abababababababababab");
 	atp.save_path = ".";
 	ses.async_add_torrent(atp);
 
@@ -133,7 +135,7 @@ TORRENT_TEST(async_add_torrent_duplicate)
 	lt::session ses(p);
 
 	add_torrent_params atp;
-	atp.info_hash.assign("abababababababababab");
+	atp.info_hash.v1.assign("abababababababababab");
 	atp.save_path = ".";
 	ses.async_add_torrent(atp);
 
@@ -159,7 +161,7 @@ TORRENT_TEST(async_add_torrent_duplicate_back_to_back)
 	lt::session ses(p);
 
 	add_torrent_params atp;
-	atp.info_hash.assign("abababababababababab");
+	atp.info_hash.v1.assign("abababababababababab");
 	atp.save_path = ".";
 	atp.flags |= torrent_flags::paused;
 	atp.flags &= ~torrent_flags::apply_ip_filter;
@@ -203,7 +205,7 @@ TORRENT_TEST(load_empty_file)
 	torrent_handle h = ses.add_torrent(std::move(atp), ec);
 
 	TEST_CHECK(!h.is_valid());
-	TEST_CHECK(ec == error_code(errors::no_metadata))
+	TEST_CHECK(ec == error_code(errors::no_metadata));
 }
 
 TORRENT_TEST(session_stats)
@@ -242,52 +244,6 @@ TORRENT_TEST(paused_session)
 	std::this_thread::sleep_for(lt::milliseconds(1000));
 
 	TEST_CHECK(!(h.flags() & torrent_flags::paused));
-}
-
-TORRENT_TEST(get_cache_info)
-{
-	lt::session s(settings());
-	lt::cache_status ret;
-	s.get_cache_info(&ret);
-
-	TEST_CHECK(ret.pieces.empty());
-#if TORRENT_ABI_VERSION == 1
-	TEST_EQUAL(ret.blocks_written, 0);
-	TEST_EQUAL(ret.writes, 0);
-	TEST_EQUAL(ret.blocks_read, 0);
-	TEST_EQUAL(ret.blocks_read_hit, 0);
-	TEST_EQUAL(ret.reads, 0);
-	TEST_EQUAL(ret.queued_bytes, 0);
-	TEST_EQUAL(ret.cache_size, 0);
-	TEST_EQUAL(ret.write_cache_size, 0);
-	TEST_EQUAL(ret.read_cache_size, 0);
-	TEST_EQUAL(ret.pinned_blocks, 0);
-	TEST_EQUAL(ret.total_used_buffers, 0);
-	TEST_EQUAL(ret.average_read_time, 0);
-	TEST_EQUAL(ret.average_write_time, 0);
-	TEST_EQUAL(ret.average_hash_time, 0);
-	TEST_EQUAL(ret.average_job_time, 0);
-	TEST_EQUAL(ret.cumulative_job_time, 0);
-	TEST_EQUAL(ret.cumulative_read_time, 0);
-	TEST_EQUAL(ret.cumulative_write_time, 0);
-	TEST_EQUAL(ret.cumulative_hash_time, 0);
-	TEST_EQUAL(ret.total_read_back, 0);
-	TEST_EQUAL(ret.read_queue_size, 0);
-	TEST_EQUAL(ret.blocked_jobs, 0);
-	TEST_EQUAL(ret.queued_jobs, 0);
-	TEST_EQUAL(ret.peak_queued, 0);
-	TEST_EQUAL(ret.pending_jobs, 0);
-	TEST_EQUAL(ret.num_jobs, 0);
-	TEST_EQUAL(ret.num_read_jobs, 0);
-	TEST_EQUAL(ret.num_write_jobs, 0);
-	TEST_EQUAL(ret.arc_mru_size, 0);
-	TEST_EQUAL(ret.arc_mru_ghost_size, 0);
-	TEST_EQUAL(ret.arc_mfu_size, 0);
-	TEST_EQUAL(ret.arc_mfu_ghost_size, 0);
-	TEST_EQUAL(ret.arc_write_size, 0);
-	TEST_EQUAL(ret.arc_volatile_size, 0);
-	TEST_EQUAL(ret.num_writing_threads, 0);
-#endif
 }
 
 template <typename Set, typename Save, typename Default, typename Load>
@@ -363,28 +319,6 @@ TORRENT_TEST(save_restore_state_save_filter)
 		[](lt::session& ses, bdecode_node& st) {
 			ses.load_state(st);
 			// make sure whatever we loaded did not include the cache size
-			settings_pack sett = ses.get_settings();
-			TEST_EQUAL(sett.get_int(settings_pack::request_queue_time), 90);
-		});
-}
-
-TORRENT_TEST(save_restore_state_load_filter)
-{
-	test_save_restore(
-		[](settings_pack& p) {
-			// set the cache size
-			p.set_int(settings_pack::request_queue_time, 1337);
-		},
-		[](lt::session& ses, entry& st) {
-			// save everything
-			ses.save_state(st);
-		},
-		[](settings_pack& p) {
-			p.set_int(settings_pack::request_queue_time, 90);
-		},
-		[](lt::session& ses, bdecode_node& st) {
-			// load everything _but_ the settings
-			ses.load_state(st, ~session::save_settings);
 			settings_pack sett = ses.get_settings();
 			TEST_EQUAL(sett.get_int(settings_pack::request_queue_time), 90);
 		});

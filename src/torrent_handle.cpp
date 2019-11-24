@@ -1,6 +1,12 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2019, Arvid Norberg
+Copyright (c) 2004, Magnus Jonsson
+Copyright (c) 2016-2017, Alden Torres
+Copyright (c) 2017, Falcosc
+Copyright (c) 2017, AllSeeingEyeTolledEweSew
+Copyright (c) 2018, Steven Siloti
+Copyright (c) 2019, Andrei Kurushin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,7 +44,6 @@ POSSIBILITY OF SUCH DAMAGE.
 
 #include "libtorrent/torrent_handle.hpp"
 #include "libtorrent/torrent.hpp"
-#include "libtorrent/torrent_info.hpp"
 #include "libtorrent/bencode.hpp"
 #include "libtorrent/entry.hpp"
 #include "libtorrent/aux_/session_impl.hpp"
@@ -77,8 +82,26 @@ namespace libtorrent {
 	constexpr status_flags_t torrent_handle::query_name;
 	constexpr status_flags_t torrent_handle::query_save_path;
 
+	void block_info::set_peer(tcp::endpoint const& ep)
+	{
+		is_v6_addr = is_v6(ep);
+		if (is_v6_addr)
+			addr.v6 = ep.address().to_v6().to_bytes();
+		else
+			addr.v4 = ep.address().to_v4().to_bytes();
+		port = ep.port();
+	}
+
+	tcp::endpoint block_info::peer() const
+	{
+		if (is_v6_addr)
+			return {address_v6(addr.v6), port};
+		else
+			return {address_v4(addr.v4), port};
+	}
+
 #ifndef BOOST_NO_EXCEPTIONS
-	void TORRENT_NO_RETURN throw_invalid_handle()
+	[[noreturn]] void throw_invalid_handle()
 	{
 		throw system_error(errors::invalid_torrent_handle);
 	}
@@ -90,7 +113,7 @@ namespace libtorrent {
 		std::shared_ptr<torrent> t = m_torrent.lock();
 		if (!t) aux::throw_ex<system_error>(errors::invalid_torrent_handle);
 		auto& ses = static_cast<session_impl&>(t->session());
-		ses.get_io_service().dispatch([=,&ses] ()
+		dispatch(ses.get_context(), [=,&ses] ()
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -122,7 +145,7 @@ namespace libtorrent {
 		bool done = false;
 
 		std::exception_ptr ex;
-		ses.get_io_service().dispatch([=,&done,&ses,&ex] ()
+		dispatch(ses.get_context(), [=,&done,&ses,&ex] ()
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -158,7 +181,7 @@ namespace libtorrent {
 		bool done = false;
 
 		std::exception_ptr ex;
-		ses.get_io_service().dispatch([=,&r,&done,&ses,&ex] ()
+		dispatch(ses.get_context(), [=,&r,&done,&ses,&ex] ()
 		{
 #ifndef BOOST_NO_EXCEPTIONS
 			try {
@@ -180,10 +203,10 @@ namespace libtorrent {
 		return r;
 	}
 
-	sha1_hash torrent_handle::info_hash() const
+	info_hash_t torrent_handle::info_hash() const
 	{
 		std::shared_ptr<torrent> t = m_torrent.lock();
-		return t ? t->info_hash() : sha1_hash();
+		return t ? t->info_hash() : info_hash_t();
 	}
 
 	int torrent_handle::max_uploads() const
@@ -668,11 +691,6 @@ namespace libtorrent {
 		return sync_call_ret<bool>(false, &torrent::user_have_piece, piece);
 	}
 
-	storage_interface* torrent_handle::get_storage_impl() const
-	{
-		return sync_call_ret<storage_interface*>(nullptr, &torrent::get_storage_impl);
-	}
-
 	bool torrent_handle::is_valid() const
 	{
 		return !m_torrent.expired();
@@ -698,7 +716,7 @@ namespace libtorrent {
 
 		std::lock_guard<std::mutex> l(holder_mutex);
 		holder[cursor++] = r;
-		cursor = cursor % holder.end_index();;
+		cursor = cursor % holder.end_index();
 		return *r;
 	}
 
@@ -754,6 +772,11 @@ namespace libtorrent {
 #endif
 	}
 
+	void torrent_handle::force_lsd_announce() const
+	{
+		async_call(&torrent::lsd_announce);
+	}
+
 	void torrent_handle::force_reannounce(int s, int idx, reannounce_flags_t const flags) const
 	{
 		async_call(&torrent::force_tracker_request, aux::time_now() + seconds(s), idx, flags);
@@ -795,6 +818,13 @@ namespace libtorrent {
 	{
 		auto queuep = &queue;
 		sync_call(&torrent::get_download_queue, queuep);
+	}
+
+	std::vector<partial_piece_info> torrent_handle::get_download_queue() const
+	{
+		std::vector<partial_piece_info> queue;
+		sync_call(&torrent::get_download_queue, &queue);
+		return queue;
 	}
 
 	void torrent_handle::set_piece_deadline(piece_index_t index, int deadline

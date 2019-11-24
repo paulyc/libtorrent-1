@@ -38,12 +38,12 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/session.hpp"
 #include "libtorrent/session_stats.hpp"
 #include "libtorrent/torrent_info.hpp"
+#include "libtorrent/disk_interface.hpp"
 
 using namespace lt;
 
 // the disk I/O thread is not simulated with high enough fidelity for this to
 // work
-/*
 TORRENT_TEST(close_file_interval)
 {
 	bool ran_to_completion = false;
@@ -85,7 +85,6 @@ TORRENT_TEST(close_file_interval)
 		});
 	TEST_CHECK(ran_to_completion);
 }
-*/
 
 TORRENT_TEST(file_pool_size)
 {

@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2008, Arvid Norberg
+Copyright (c) 2006-2019, Arvid Norberg
+Copyright (c) 2015-2017, Alden Torres
+Copyright (c) 2016-2018, Steven Siloti
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017, AllSeeingEyeTolledEweSew
+Copyright (c) 2018, d-komarov
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -34,7 +39,6 @@ POSSIBILITY OF SUCH DAMAGE.
 #include <map>
 #include <tuple>
 #include <functional>
-#include <random>
 
 #include "libtorrent/session.hpp"
 #include "libtorrent/hasher.hpp"
@@ -51,7 +55,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/hex.hpp" // to_hex
 #include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/aux_/path.hpp"
-#include "libtorrent/random.hpp"
+#include "libtorrent/aux_/merkle.hpp"
+#include "libtorrent/disk_interface.hpp" // for default_block_size
 
 #include "test.hpp"
 #include "test_utils.hpp"
@@ -68,13 +73,23 @@ using namespace lt;
 #include <conio.h>
 #endif
 
-std::shared_ptr<torrent_info> generate_torrent()
+std::shared_ptr<torrent_info> generate_torrent(bool const with_files)
 {
+	if (with_files)
+	{
+		error_code ec;
+		create_directories("test_resume", ec);
+		std::vector<char> a(128 * 1024 * 8);
+		std::vector<char> b(128 * 1024);
+		std::ofstream("test_resume/tmp1").write(a.data(), std::streamsize(a.size()));
+		std::ofstream("test_resume/tmp2").write(b.data(), std::streamsize(b.size()));
+		std::ofstream("test_resume/tmp3").write(b.data(), std::streamsize(b.size()));
+	}
 	file_storage fs;
 	fs.add_file("test_resume/tmp1", 128 * 1024 * 8);
 	fs.add_file("test_resume/tmp2", 128 * 1024);
 	fs.add_file("test_resume/tmp3", 128 * 1024);
-	lt::create_torrent t(fs, 128 * 1024, 6);
+	lt::create_torrent t(fs, 128 * 1024);
 
 	t.add_tracker("http://torrent_file_tracker.com/announce");
 	t.add_url_seed("http://torrent_file_url_seed.com/");
@@ -85,6 +100,14 @@ std::shared_ptr<torrent_info> generate_torrent()
 		sha1_hash ph;
 		aux::random_bytes(ph);
 		t.set_hash(i, ph);
+	}
+
+	for (piece_index_t i : fs.piece_range())
+	{
+		sha256_hash ph;
+		aux::random_bytes(ph);
+		file_index_t const f(fs.file_index_at_piece(i));
+		t.set_hash2(f, i - fs.piece_index_at_file(f), ph);
 	}
 
 	std::vector<char> buf;
@@ -206,7 +229,7 @@ alert const* wait_for_alert(lt::session& ses, int type, char const* name
 
 	while (true)
 	{
-		time_point now = clock_type::now();
+		time_point const now = clock_type::now();
 		if (now > end_time) return nullptr;
 
 		alert const* ret = nullptr;
@@ -430,21 +453,34 @@ pid_type async_run(char const* cmdline)
 	char buf[2048];
 	std::snprintf(buf, sizeof(buf), "%s", cmdline);
 
+	std::printf("CreateProcess %s\n", buf);
 	PROCESS_INFORMATION pi;
-	STARTUPINFOA startup;
-	memset(&startup, 0, sizeof(startup));
+	STARTUPINFOA startup{};
 	startup.cb = sizeof(startup);
+	startup.dwFlags = STARTF_USESTDHANDLES;
 	startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
 	startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
-	startup.hStdError = GetStdHandle(STD_INPUT_HANDLE);
-	int ret = CreateProcessA(NULL, buf, NULL, NULL, TRUE
-		, CREATE_NEW_PROCESS_GROUP, NULL, NULL, &startup, &pi);
+	startup.hStdError = GetStdHandle(STD_OUTPUT_HANDLE);
+	int const ret = CreateProcessA(nullptr, buf, nullptr, nullptr, TRUE
+		, 0, nullptr, nullptr, &startup, &pi);
 
 	if (ret == 0)
 	{
-		int error = GetLastError();
-		std::printf("failed (%d) %s\n", error, error_code(error, system_category()).message().c_str());
+		int const error = GetLastError();
+		std::printf("ERROR: (%d) %s\n", error, error_code(error, system_category()).message().c_str());
 		return 0;
+	}
+
+	DWORD len = sizeof(buf);
+	if (QueryFullProcessImageNameA(pi.hProcess, PROCESS_NAME_NATIVE, buf, &len) == 0)
+	{
+		int const error = GetLastError();
+		std::printf("ERROR: QueryFullProcessImageName (%d) %s\n", error
+			, error_code(error, system_category()).message().c_str());
+	}
+	else
+	{
+		std::printf("launched: %s\n", buf);
 	}
 	return pi.dwProcessId;
 #else
@@ -469,7 +505,7 @@ pid_type async_run(char const* cmdline)
 	int ret = posix_spawnp(&p, argv[0], nullptr, nullptr, &argv[0], nullptr);
 	if (ret != 0)
 	{
-		std::printf("failed (%d) %s\n", errno, strerror(errno));
+		std::printf("ERROR (%d) %s\n", errno, strerror(errno));
 		return 0;
 	}
 	return p;
@@ -480,7 +516,7 @@ void stop_process(pid_type p)
 {
 #ifdef _WIN32
 	HANDLE proc = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, p);
-	if (proc == NULL) return;
+	if (proc == nullptr) return;
 	TerminateProcess(proc, 138);
 	WaitForSingleObject(proc, 5000);
 	CloseHandle(proc);
@@ -523,6 +559,69 @@ void stop_all_proxies()
 	}
 }
 
+namespace {
+
+#ifdef TORRENT_BUILD_SIMULATOR
+void wait_for_port(int) {}
+#else
+void wait_for_port(int const port)
+{
+	// wait until the python program is ready to accept connections
+	int i = 0;
+	io_context ios;
+	for (;;)
+	{
+		tcp::socket s(ios);
+		error_code ec;
+		s.open(tcp::v4(), ec);
+		if (ec)
+		{
+			std::printf("ERROR opening probe socket: (%d) %s\n"
+				, ec.value(), ec.message().c_str());
+			return;
+		}
+		s.connect(tcp::endpoint(make_address("127.0.0.1")
+			, std::uint16_t(port)), ec);
+		if (ec == boost::system::errc::connection_refused)
+		{
+			if (i == 100)
+			{
+				std::printf("ERROR: somehow the python program still hasn't "
+					"opened its socket on port %d\n", port);
+				return;
+			}
+			++i;
+			std::this_thread::sleep_for(lt::milliseconds(500));
+			continue;
+		}
+		if (ec)
+		{
+			std::printf("ERROR connecting probe socket: (%d) %s\n"
+				, ec.value(), ec.message().c_str());
+			return;
+		}
+		return;
+	}
+}
+#endif
+
+std::string get_python()
+{
+#ifdef _WIN32
+	char dummy[1];
+	DWORD const req_size = GetEnvironmentVariable("PYTHON_INTERPRETER", dummy, sizeof(dummy));
+	if (req_size > 1 && req_size < 4096)
+	{
+		std::vector<char> buf(req_size);
+		DWORD const sz = GetEnvironmentVariable("PYTHON_INTERPRETER", buf.data(), buf.size());
+		if (sz == buf.size() - 1) return buf.data();
+	}
+#endif
+	return "python";
+}
+
+}
+
 // returns a port on success and -1 on failure
 int start_proxy(int proxy_type)
 {
@@ -534,9 +633,9 @@ int start_proxy(int proxy_type)
 		if (i->second.type == proxy_type) { return i->first; }
 	}
 
-	int port = 2000 + static_cast<int>(lt::random(6000));
+	int port = 10000 + static_cast<int>(lt::random(50000));
 	error_code ec;
-	io_service ios;
+	io_context ios;
 
 	// make sure the port we pick is free
 	do {
@@ -544,7 +643,7 @@ int start_proxy(int proxy_type)
 		tcp::socket s(ios);
 		s.open(tcp::v4(), ec);
 		if (ec) break;
-		s.bind(tcp::endpoint(address::from_string("127.0.0.1")
+		s.bind(tcp::endpoint(make_address("127.0.0.1")
 			, std::uint16_t(port)), ec);
 	} while (ec);
 
@@ -558,29 +657,30 @@ int start_proxy(int proxy_type)
 		case settings_pack::socks4:
 			type = "socks4";
 			auth = " --allow-v4";
-			cmd = "python ../socks.py";
+			cmd = "../socks.py";
 			break;
 		case settings_pack::socks5:
 			type = "socks5";
-			cmd = "python ../socks.py";
+			cmd = "../socks.py";
 			break;
 		case settings_pack::socks5_pw:
 			type = "socks5";
 			auth = " --username testuser --password testpass";
-			cmd = "python ../socks.py";
+			cmd = "../socks.py";
 			break;
 		case settings_pack::http:
 			type = "http";
-			cmd = "python ../http.py";
+			cmd = "../http.py";
 			break;
 		case settings_pack::http_pw:
 			type = "http";
 			auth = " --username testuser --password testpass";
-			cmd = "python ../http.py";
+			cmd = "../http.py";
 			break;
 	}
-	char buf[512];
-	std::snprintf(buf, sizeof(buf), "%s --port %d%s", cmd, port, auth);
+	std::string python_exe = get_python();
+	char buf[1024];
+	std::snprintf(buf, sizeof(buf), "%s %s --port %d%s", python_exe.c_str(), cmd, port, auth);
 
 	std::printf("%s starting proxy on port %d (%s %s)...\n", time_now_string(), port, type, auth);
 	std::printf("%s\n", buf);
@@ -590,6 +690,7 @@ int start_proxy(int proxy_type)
 	running_proxies.insert(std::make_pair(port, t));
 	std::printf("%s launched\n", time_now_string());
 	std::this_thread::sleep_for(lt::milliseconds(500));
+	wait_for_port(port);
 	return port;
 }
 
@@ -600,9 +701,6 @@ std::shared_ptr<T> clone_ptr(std::shared_ptr<T> const& ptr)
 {
 	return std::make_shared<T>(*ptr);
 }
-
-std::uint8_t random_byte()
-{ return static_cast<std::uint8_t>(lt::random(0xff)); }
 
 std::vector<char> generate_piece(piece_index_t const idx, int const piece_size)
 {
@@ -636,7 +734,7 @@ lt::file_storage make_file_storage(span<const int> const file_sizes
 	}
 
 	fs.set_piece_length(piece_size);
-	fs.set_num_pieces(int((fs.total_size() + piece_size - 1) / piece_size));
+	fs.set_num_pieces(aux::calc_num_pieces(fs));
 
 	return fs;
 }
@@ -647,13 +745,24 @@ std::shared_ptr<lt::torrent_info> make_torrent(span<const int> const file_sizes
 	using namespace lt;
 	file_storage fs = make_file_storage(file_sizes, piece_size);
 
-	lt::create_torrent ct(fs, piece_size, 0x4000
-		, lt::create_torrent::optimize_alignment);
+	lt::create_torrent ct(fs, piece_size);
 
 	for (auto const i : fs.piece_range())
 	{
 		std::vector<char> piece = generate_piece(i, fs.piece_size(i));
 		ct.set_hash(i, hasher(piece).final());
+
+		aux::vector<sha256_hash> tree(merkle_num_nodes(fs.piece_length() / default_block_size));
+
+		int const blocks_per_piece = fs.piece_length() / default_block_size;
+		for (int j = 0; j < int(piece.size()); j += default_block_size)
+		{
+			tree[tree.end_index() - blocks_per_piece + j / default_block_size]
+				= hasher256(piece.data() + j, std::min(default_block_size, int(piece.size()) - j)).final();
+		}
+		merkle_fill_tree(tree, fs.piece_length() / default_block_size);
+		file_index_t const f(fs.file_index_at_piece(i));
+		ct.set_hash2(f, i - fs.piece_index_at_file(f), tree[0]);
 	}
 
 	std::vector<char> buf;
@@ -684,7 +793,7 @@ void create_random_files(std::string const& path, span<const int> file_sizes
 
 		int to_write = file_sizes[i];
 		if (fs) fs->add_file(full_path, to_write);
-		file f(full_path, open_mode::write_only, ec);
+		file f(full_path, aux::open_mode::write, ec);
 		if (ec) std::printf("failed to create file \"%s\": (%d) %s\n"
 			, full_path.c_str(), ec.value(), ec.message().c_str());
 		std::int64_t offset = 0;
@@ -703,7 +812,8 @@ void create_random_files(std::string const& path, span<const int> file_sizes
 
 std::shared_ptr<torrent_info> create_torrent(std::ostream* file
 	, char const* name, int piece_size
-	, int num_pieces, bool add_tracker, std::string ssl_certificate)
+	, int num_pieces, bool add_tracker, lt::create_flags_t const flags
+	, std::string ssl_certificate)
 {
 	// exercise the path when encountering invalid urls
 	char const* invalid_tracker_url = "http:";
@@ -712,7 +822,7 @@ std::shared_ptr<torrent_info> create_torrent(std::ostream* file
 	file_storage fs;
 	int total_size = piece_size * num_pieces;
 	fs.add_file(name, total_size);
-	lt::create_torrent t(fs, piece_size);
+	lt::create_torrent t(fs, piece_size, flags);
 	if (add_tracker)
 	{
 		t.add_tracker(invalid_tracker_url);
@@ -740,16 +850,34 @@ std::shared_ptr<torrent_info> create_torrent(std::ostream* file
 	for (int i = 0; i < int(piece.size()); ++i)
 		piece[i] = (i % 26) + 'A';
 
-	// calculate the hash for all pieces
-	sha1_hash ph = hasher(piece).final();
-	for (auto const i : fs.piece_range())
-		t.set_hash(i, ph);
+	if (!(flags & create_torrent::v2_only))
+	{
+		// calculate the hash for all pieces
+		sha1_hash ph = hasher(piece).final();
+		for (auto const i : fs.piece_range())
+			t.set_hash(i, ph);
+	}
+
+	if (!(flags & create_torrent::v1_only))
+	{
+		int const blocks_in_piece = piece_size / default_block_size;
+		aux::vector<sha256_hash> v2tree(merkle_num_nodes(merkle_num_leafs(blocks_in_piece)));
+		for (int i = 0; i < blocks_in_piece; ++i)
+		{
+			sha256_hash const block_hash = hasher256(span<char>(piece).subspan(i * default_block_size, default_block_size)).final();
+			v2tree[v2tree.end_index() - merkle_num_leafs(blocks_in_piece) + i] = block_hash;
+		}
+		merkle_fill_tree(v2tree, merkle_num_leafs(blocks_in_piece));
+
+		for (piece_index_t i(0); i < t.files().end_piece(); ++i)
+			t.set_hash2(file_index_t{ 0 }, i - piece_index_t(0), v2tree[0]);
+	}
 
 	if (file)
 	{
 		while (total_size > 0)
 		{
-			file->write(&piece[0], std::min(piece.end_index(), total_size));
+			file->write(piece.data(), std::min(piece.end_index(), total_size));
 			total_size -= piece.end_index();
 		}
 	}
@@ -770,7 +898,7 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 	, std::string suffix, int piece_size
 	, std::shared_ptr<torrent_info>* torrent, bool super_seeding
 	, add_torrent_params const* p, bool stop_lsd, bool use_ssl_ports
-	, std::shared_ptr<torrent_info>* torrent2)
+	, std::shared_ptr<torrent_info>* torrent2, create_flags_t const flags)
 {
 	TORRENT_ASSERT(ses1);
 	TORRENT_ASSERT(ses2);
@@ -787,8 +915,8 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 	// This has the effect of applying the global
 	// rule to all peers, regardless of if they're local or not
 	ip_filter f;
-	f.add_rule(address_v4::from_string("0.0.0.0")
-		, address_v4::from_string("255.255.255.255")
+	f.add_rule(make_address_v4("0.0.0.0")
+		, make_address_v4("255.255.255.255")
 		, 1 << static_cast<std::uint32_t>(lt::session::global_peer_class_id));
 	ses1->set_peer_class_filter(f);
 	ses2->set_peer_class_filter(f);
@@ -810,15 +938,16 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 	{
 		error_code ec;
 		create_directory("tmp1" + suffix, ec);
-		std::ofstream file(combine_path("tmp1" + suffix, "temporary").c_str());
-		t = ::create_torrent(&file, "temporary", piece_size, 9, false);
+		std::string const file_path = combine_path("tmp1" + suffix, "temporary");
+		std::ofstream file(file_path.c_str());
+		t = ::create_torrent(&file, "temporary", piece_size, 9, false, flags);
 		file.close();
 		if (clear_files)
 		{
 			remove_all(combine_path("tmp2" + suffix, "temporary"), ec);
 			remove_all(combine_path("tmp3" + suffix, "temporary"), ec);
 		}
-		std::printf("generated torrent: %s tmp1%s/temporary\n", aux::to_hex(t->info_hash()).c_str(), suffix.c_str());
+		std::printf("generated torrent: %s %s\n", aux::to_hex(t->info_hash().v2).c_str(), file_path.c_str());
 	}
 	else
 	{
@@ -905,7 +1034,7 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 
 		std::printf("%s: ses1: connecting peer port: %d\n"
 			, time_now_string(), port);
-		tor1.connect_peer(tcp::endpoint(address::from_string("127.0.0.1", ec)
+		tor1.connect_peer(tcp::endpoint(make_address("127.0.0.1", ec)
 			, std::uint16_t(port)));
 
 		if (ses3)
@@ -928,10 +1057,10 @@ setup_transfer(lt::session* ses1, lt::session* ses2, lt::session* ses3
 
 			std::printf("ses3: connecting peer port: %d\n", port);
 			tor3.connect_peer(tcp::endpoint(
-					address::from_string("127.0.0.1", ec), std::uint16_t(port)));
+					make_address("127.0.0.1", ec), std::uint16_t(port)));
 			std::printf("ses3: connecting peer port: %d\n", port2);
 				tor3.connect_peer(tcp::endpoint(
-					address::from_string("127.0.0.1", ec)
+					make_address("127.0.0.1", ec)
 					, std::uint16_t(port2)));
 		}
 	}
@@ -947,7 +1076,7 @@ int start_web_server(bool ssl, bool chunked_encoding, bool keepalive, int min_in
 {
 	int port = 2000 + static_cast<int>(lt::random(6000));
 	error_code ec;
-	io_service ios;
+	io_context ios;
 
 	// make sure the port we pick is free
 	do {
@@ -955,13 +1084,15 @@ int start_web_server(bool ssl, bool chunked_encoding, bool keepalive, int min_in
 		tcp::socket s(ios);
 		s.open(tcp::v4(), ec);
 		if (ec) break;
-		s.bind(tcp::endpoint(address::from_string("127.0.0.1")
+		s.bind(tcp::endpoint(make_address("127.0.0.1")
 			, std::uint16_t(port)), ec);
 	} while (ec);
 
+	std::string python_exe = get_python();
+
 	char buf[200];
-	std::snprintf(buf, sizeof(buf), "python ../web_server.py %d %d %d %d %d"
-		, port, chunked_encoding, ssl, keepalive, min_interval);
+	std::snprintf(buf, sizeof(buf), "%s ../web_server.py %d %d %d %d %d"
+		, python_exe.c_str(), port, chunked_encoding, ssl, keepalive, min_interval);
 
 	std::printf("%s starting web_server on port %d...\n", time_now_string(), port);
 
@@ -970,7 +1101,8 @@ int start_web_server(bool ssl, bool chunked_encoding, bool keepalive, int min_in
 	if (r == 0) abort();
 	web_server_pid = r;
 	std::printf("%s launched\n", time_now_string());
-	std::this_thread::sleep_for(lt::milliseconds(500));
+	std::this_thread::sleep_for(lt::milliseconds(1000));
+	wait_for_port(port);
 	return port;
 }
 
@@ -985,7 +1117,7 @@ void stop_web_server()
 tcp::endpoint ep(char const* ip, int port)
 {
 	error_code ec;
-	tcp::endpoint ret(address::from_string(ip, ec), std::uint16_t(port));
+	tcp::endpoint ret(make_address(ip, ec), std::uint16_t(port));
 	TEST_CHECK(!ec);
 	return ret;
 }
@@ -993,7 +1125,7 @@ tcp::endpoint ep(char const* ip, int port)
 udp::endpoint uep(char const* ip, int port)
 {
 	error_code ec;
-	udp::endpoint ret(address::from_string(ip, ec), std::uint16_t(port));
+	udp::endpoint ret(make_address(ip, ec), std::uint16_t(port));
 	TEST_CHECK(!ec);
 	return ret;
 }
@@ -1001,7 +1133,7 @@ udp::endpoint uep(char const* ip, int port)
 lt::address addr(char const* ip)
 {
 	lt::error_code ec;
-	auto ret = lt::address::from_string(ip, ec);
+	auto ret = lt::make_address(ip, ec);
 	TEST_CHECK(!ec);
 	return ret;
 }
@@ -1009,7 +1141,7 @@ lt::address addr(char const* ip)
 lt::address_v4 addr4(char const* ip)
 {
 	lt::error_code ec;
-	auto ret = lt::address_v4::from_string(ip, ec);
+	auto ret = lt::make_address_v4(ip, ec);
 	TEST_CHECK(!ec);
 	return ret;
 }
@@ -1017,7 +1149,7 @@ lt::address_v4 addr4(char const* ip)
 lt::address_v6 addr6(char const* ip)
 {
 	lt::error_code ec;
-	auto ret = lt::address_v6::from_string(ip, ec);
+	auto ret = lt::make_address_v6(ip, ec);
 	TEST_CHECK(!ec);
 	return ret;
 }

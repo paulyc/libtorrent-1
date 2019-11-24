@@ -1,6 +1,10 @@
 /*
 
-Copyright (c) 2008-2018, Arvid Norberg
+Copyright (c) 2008-2019, Arvid Norberg
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017, Pavel Pimenov
+Copyright (c) 2018, Eugene Shalygin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -35,7 +39,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #if TORRENT_ABI_VERSION == 1
 
 #include "libtorrent/lazy_entry.hpp"
-#include "libtorrent/bdecode.hpp" // for error codes
+#include "libtorrent/bdecode.hpp" // for error codes and escape_string
 #include "libtorrent/string_util.hpp" // for is_digit
 #include <algorithm>
 #include <cstring> // for memset
@@ -440,7 +444,7 @@ namespace {
 		else if (int(m_size) == this->capacity())
 		{
 			std::size_t const capacity = std::size_t(this->capacity()) * lazy_entry_grow_factor / 100;
-			lazy_entry* tmp = new (std::nothrow) lazy_entry[capacity + 1];
+			auto* const tmp = new (std::nothrow) lazy_entry[capacity + 1];
 			if (tmp == nullptr) return nullptr;
 			std::move(m_data.list, m_data.list + m_size + 1, tmp);
 
@@ -502,7 +506,7 @@ namespace {
 		this->swap(other);
 	}
 
-	lazy_entry& lazy_entry::operator=(lazy_entry&& other)
+	lazy_entry& lazy_entry::operator=(lazy_entry&& other) &
 	{
 		this->swap(other);
 		return *this;
@@ -560,23 +564,6 @@ namespace {
 		return line_len;
 	}
 
-	void escape_string(std::string& ret, char const* str, int len)
-	{
-		for (int i = 0; i < len; ++i)
-		{
-			if (str[i] >= 32 && str[i] < 127)
-			{
-				ret += str[i];
-			}
-			else
-			{
-				char tmp[5];
-				std::snprintf(tmp, sizeof(tmp), "\\x%02x", std::uint8_t(str[i]));
-				ret += tmp;
-			}
-		}
-	}
-
 	void print_string(std::string& ret, char const* str, int const len, bool single_line)
 	{
 		TORRENT_ASSERT(len >= 0);
@@ -604,13 +591,13 @@ namespace {
 		}
 		if (single_line && len > 20)
 		{
-			escape_string(ret, str, 9);
+			aux::escape_string(ret, str, 9);
 			ret += "...";
-			escape_string(ret, str + len - 9, 9);
+			aux::escape_string(ret, str + len - 9, 9);
 		}
 		else
 		{
-			escape_string(ret, str, len);
+			aux::escape_string(ret, str, len);
 		}
 		ret += "'";
 	}

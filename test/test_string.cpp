@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2013-2019, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016, 2018, Alden Torres
+Copyright (c) 2016, Steven Siloti
+Copyright (c) 2016, Andrei Kurushin
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -218,11 +223,11 @@ TORRENT_TEST(base64)
 	TEST_CHECK(base64encode("foobar") == "Zm9vYmFy");
 }
 
-#if TORRENT_USE_I2P
 TORRENT_TEST(base32)
 {
 	// base32 test vectors from http://www.faqs.org/rfcs/rfc4648.html
 
+#if TORRENT_USE_I2P
 	TEST_CHECK(base32encode("") == "");
 	TEST_CHECK(base32encode("f") == "MY======");
 	TEST_CHECK(base32encode("fo") == "MZXQ====");
@@ -235,6 +240,12 @@ TORRENT_TEST(base32)
 	TEST_CHECK(base32encode("fo", string::no_padding) == "MZXQ");
 	TEST_CHECK(base32encode("foob", string::i2p) == "mzxw6yq");
 	TEST_CHECK(base32encode("foobar", string::lowercase) == "mzxw6ytboi======");
+
+	std::string test;
+	for (int i = 0; i < 255; ++i)
+		test += char(i);
+
+	TEST_CHECK(base32decode(base32encode(test)) == test);
 #endif // TORRENT_USE_I2P
 
 	TEST_CHECK(base32decode("") == "");
@@ -252,12 +263,6 @@ TORRENT_TEST(base32)
 
 	// make sure invalid encoding returns the empty string
 	TEST_CHECK(base32decode("mZXw6yTBO1{#&*()=") == "");
-
-	std::string test;
-	for (int i = 0; i < 255; ++i)
-		test += char(i);
-
-	TEST_CHECK(base32decode(base32encode(test)) == test);
 }
 
 TORRENT_TEST(escape_string)
@@ -325,22 +330,6 @@ TORRENT_TEST(path)
 	std::string path = "a\\b\\c";
 	convert_path_to_posix(path);
 	TEST_EQUAL(path, "a/b/c");
-
-#if TORRENT_ABI_VERSION == 1
-	// resolve_file_url
-
-#ifdef TORRENT_WINDOWS
-	std::string p = "c:/blah/foo/bar\\";
-	convert_path_to_windows(p);
-	TEST_EQUAL(p, "c:\\blah\\foo\\bar\\");
-	TEST_EQUAL(resolve_file_url("file:///c:/blah/foo/bar"), "c:\\blah\\foo\\bar");
-	TEST_EQUAL(resolve_file_url("file:///c:/b%3fah/foo/bar"), "c:\\b?ah\\foo\\bar");
-	TEST_EQUAL(resolve_file_url("file://\\c:\\b%3fah\\foo\\bar"), "c:\\b?ah\\foo\\bar");
-#else
-	TEST_EQUAL(resolve_file_url("file:///c/blah/foo/bar"), "/c/blah/foo/bar");
-	TEST_EQUAL(resolve_file_url("file:///c/b%3fah/foo/bar"), "/c/b?ah/foo/bar");
-#endif
-#endif
 }
 
 namespace {
@@ -455,41 +444,6 @@ TORRENT_TEST(i2p_url)
 }
 #endif
 
-TORRENT_TEST(string_hash_no_case)
-{
-	string_hash_no_case hsh;
-
-	// make sure different strings yield different hashes
-	TEST_CHECK(hsh("ab") != hsh("ba"));
-
-	// make sure case is ignored
-	TEST_EQUAL(hsh("Ab"), hsh("ab"));
-	TEST_EQUAL(hsh("Ab"), hsh("aB"));
-
-	// make sure zeroes in strings are supported
-	TEST_CHECK(hsh(std::string("\0a", 2)) != hsh(std::string("\0b", 2)));
-	TEST_EQUAL(hsh(std::string("\0a", 2)), hsh(std::string("\0a", 2)));
-}
-
-TORRENT_TEST(string_eq_no_case)
-{
-	string_eq_no_case cmp;
-	TEST_CHECK(cmp("ab", "ba") == false);
-	TEST_CHECK(cmp("", ""));
-	TEST_CHECK(cmp("abc", "abc"));
-
-	// make sure different lengths are correctly treated as different
-	TEST_CHECK(cmp("abc", "ab") == false);
-
-	// make sure case is ignored
-	TEST_CHECK(cmp("Ab", "ab"));
-	TEST_CHECK(cmp("Ab", "aB"));
-
-	// make sure zeros are supported
-	TEST_CHECK(cmp(std::string("\0a", 2), std::string("\0b", 2)) == false);
-	TEST_CHECK(cmp(std::string("\0a", 2), std::string("\0a", 2)));
-}
-
 TORRENT_TEST(string_ptr_zero_termination)
 {
 	char str[] = {'f', 'o', 'o', 'b', 'a', 'r'};
@@ -529,3 +483,17 @@ TORRENT_TEST(string_ptr_move_assign)
 	TEST_CHECK(*p2 == nullptr);
 }
 
+TORRENT_TEST(find_first_of)
+{
+	string_view test("01234567891");
+	TEST_EQUAL(find_first_of(test, '1', 0), 1);
+	TEST_EQUAL(find_first_of(test, '1', 1), 1);
+	TEST_EQUAL(find_first_of(test, '1', 2), 10);
+	TEST_EQUAL(find_first_of(test, '1', 3), 10);
+
+	TEST_EQUAL(find_first_of(test, "61", 0), 1);
+	TEST_EQUAL(find_first_of(test, "61", 1), 1);
+	TEST_EQUAL(find_first_of(test, "61", 2), 6);
+	TEST_EQUAL(find_first_of(test, "61", 3), 6);
+	TEST_EQUAL(find_first_of(test, "61", 4), 6);
+}

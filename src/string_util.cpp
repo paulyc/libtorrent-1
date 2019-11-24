@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2012-2018, Arvid Norberg
+Copyright (c) 2012, 2014-2019, Arvid Norberg
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017, Andrei Kurushin
+Copyright (c) 2017, Pavel Pimenov
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -86,26 +89,6 @@ namespace libtorrent {
 		return (c >= 'A' && c <= 'Z') ? c - 'A' + 'a' : c;
 	}
 
-	int split_string(char const** tags, int buf_size, char* in)
-	{
-		int ret = 0;
-		char* i = in;
-		for (;*i; ++i)
-		{
-			if (!is_print(*i) || is_space(*i))
-			{
-				*i = 0;
-				if (ret == buf_size) return ret;
-				continue;
-			}
-			if (i == in || i[-1] == 0)
-			{
-				tags[ret++] = i;
-			}
-		}
-		return ret;
-	}
-
 	bool string_begins_no_case(char const* s1, char const* s2)
 	{
 		TORRENT_ASSERT(s1 != nullptr);
@@ -160,13 +143,12 @@ namespace libtorrent {
 		return static_cast<int>(it - target.begin());
 	}
 
-	char* allocate_string_copy(char const* str)
+	char* allocate_string_copy(string_view str)
 	{
-		if (str == nullptr) return nullptr;
-		std::size_t const len = std::strlen(str);
-		auto* tmp = new char[len + 1];
-		std::copy(str, str + len, tmp);
-		tmp[len] = '\0';
+		if (str.empty()) return nullptr;
+		auto* tmp = new char[str.size() + 1];
+		std::copy(str.data(), str.data() + str.size(), tmp);
+		tmp[str.size()] = '\0';
 		return tmp;
 	}
 
@@ -400,28 +382,4 @@ namespace libtorrent {
 	}
 
 #endif
-
-	std::size_t string_hash_no_case::operator()(std::string const& s) const
-	{
-		std::size_t ret = 5381;
-		for (auto const c : s)
-			ret = (ret * 33) ^ static_cast<std::size_t>(to_lower(c));
-		return ret;
-	}
-
-	bool string_eq_no_case::operator()(std::string const& lhs, std::string const& rhs) const
-	{
-		if (lhs.size() != rhs.size()) return false;
-
-		auto s1 = lhs.cbegin();
-		auto s2 = rhs.cbegin();
-
-		while (s1 != lhs.end() && s2 != rhs.end())
-		{
-			if (to_lower(*s1) != to_lower(*s2)) return false;
-			++s1;
-			++s2;
-		}
-		return true;
-	}
 }

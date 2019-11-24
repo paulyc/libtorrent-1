@@ -1,6 +1,13 @@
 /*
 
-Copyright (c) 2003-2018, Arvid Norberg
+Copyright (c) 2003-2019, Arvid Norberg
+Copyright (c) 2004, Magnus Jonsson
+Copyright (c) 2015, 2018, Steven Siloti
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017, Falcosc
+Copyright (c) 2017, AllSeeingEyeTolledEweSew
+Copyright (c) 2019, Amir Abrams
+Copyright (c) 2019, Andrei Kurushin
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -56,6 +63,7 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/vector.hpp"
 #include "libtorrent/storage_defs.hpp"
 #include "libtorrent/torrent_flags.hpp"
+#include "libtorrent/torrent_info.hpp"
 #include "libtorrent/peer_info.hpp" // for peer_source_flags_t
 #include "libtorrent/download_priority.hpp"
 #include "libtorrent/pex_flags.hpp"
@@ -72,7 +80,7 @@ namespace aux {
 	class torrent;
 
 #ifndef BOOST_NO_EXCEPTIONS
-	void TORRENT_NO_RETURN throw_invalid_handle();
+	[[noreturn]] void throw_invalid_handle();
 #endif
 
 	using status_flags_t = flags::bitfield_flag<std::uint32_t, struct status_flags_tag>;
@@ -113,22 +121,8 @@ namespace aux {
 	public:
 
 		// The peer is the ip address of the peer this block was downloaded from.
-		void set_peer(tcp::endpoint const& ep)
-		{
-			is_v6_addr = is_v6(ep);
-			if (is_v6_addr)
-				addr.v6 = ep.address().to_v6().to_bytes();
-			else
-				addr.v4 = ep.address().to_v4().to_bytes();
-			port = ep.port();
-		}
-		tcp::endpoint peer() const
-		{
-			if (is_v6_addr)
-				return tcp::endpoint(address_v6(addr.v6), port);
-			else
-				return tcp::endpoint(address_v4(addr.v4), port);
-		}
+		void set_peer(tcp::endpoint const& ep);
+		tcp::endpoint peer() const;
 
 		// the number of bytes that have been received for this block
 		unsigned bytes_progress:15;
@@ -157,8 +151,8 @@ namespace aux {
 		partial_piece_info() = default;
 		partial_piece_info(partial_piece_info&&) noexcept = default;
 		partial_piece_info(partial_piece_info const&) = default;
-		partial_piece_info& operator=(partial_piece_info const&) = default;
-		partial_piece_info& operator=(partial_piece_info&&) noexcept = default;
+		partial_piece_info& operator=(partial_piece_info const&) & = default;
+		partial_piece_info& operator=(partial_piece_info&&) & noexcept = default;
 #include "libtorrent/aux_/disable_warnings_pop.hpp"
 #endif
 		// the index of the piece in question. ``blocks_in_piece`` is the number
@@ -248,10 +242,11 @@ namespace aux {
 		// i.e. is_valid() will return false.
 		torrent_handle() noexcept = default;
 
+		// hidden
 		torrent_handle(torrent_handle const& t) = default;
 		torrent_handle(torrent_handle&& t) noexcept = default;
-		torrent_handle& operator=(torrent_handle const&) = default;
-		torrent_handle& operator=(torrent_handle&&) noexcept = default;
+		torrent_handle& operator=(torrent_handle const&) & = default;
+		torrent_handle& operator=(torrent_handle&&) & noexcept = default;
 
 		// instruct libtorrent to overwrite any data that may already have been
 		// downloaded with the data of the new piece being added.
@@ -342,10 +337,11 @@ namespace aux {
 		// what to *include* are defined in the status_flags_t enum.
 		torrent_status status(status_flags_t flags = status_flags_t::all()) const;
 
-		// ``get_download_queue()`` takes a non-const reference to a vector which
-		// it will fill with information about pieces that are partially
-		// downloaded or not downloaded at all but partially requested. See
-		// partial_piece_info for the fields in the returned vector.
+		// ``get_download_queue()`` returns a vector with information about pieces
+		// that are partially downloaded or not downloaded but partially
+		// requested. See partial_piece_info for the fields in the returned
+		// vector.
+		std::vector<partial_piece_info> get_download_queue() const;
 		void get_download_queue(std::vector<partial_piece_info>& queue) const;
 
 		// used to ask libtorrent to send an alert once the piece has been
@@ -426,7 +422,7 @@ namespace aux {
 			piece_granularity = 1
 		};
 
-		// This function fills in the supplied vector with the the number of
+		// This function fills in the supplied vector with the number of
 		// bytes downloaded of each file in this torrent. The progress values are
 		// ordered the same as the files in the torrent_info. This operation is
 		// not very cheap. Its complexity is *O(n + mj)*. Where *n* is the number
@@ -574,6 +570,9 @@ namespace aux {
 		// the specified flags and leave any other flags unchanged.
 		// ``unset_flags`` clears the specified flags, while leaving
 		// any other flags unchanged.
+		//
+		// The `seed_mode` flag is special, it can only be cleared by the
+		// `set_flags()` function, not set.
 		torrent_flags_t flags() const;
 		void set_flags(torrent_flags_t flags, torrent_flags_t mask) const;
 		void set_flags(torrent_flags_t flags) const;
@@ -819,17 +818,12 @@ namespace aux {
 			, std::string const& private_key
 			, std::string const& dh_params);
 
-		// Returns the storage implementation for this torrent. This depends on the
-		// storage constructor function that was passed to add_torrent.
-		storage_interface* get_storage_impl() const;
-
 		// Returns a pointer to the torrent_info object associated with this
 		// torrent. The torrent_info object may be a copy of the internal object.
 		// If the torrent doesn't have metadata, the pointer will not be
 		// initialized (i.e. a nullptr). The torrent may be in a state
 		// without metadata only if it was started without a .torrent file, e.g.
-		// by using the libtorrent extension of just supplying a tracker and
-		// info-hash.
+		// by being added by magnet link
 		std::shared_ptr<const torrent_info> torrent_file() const;
 
 #if TORRENT_ABI_VERSION == 1
@@ -1044,8 +1038,12 @@ namespace aux {
 		//
 		// ``force_dht_announce`` will announce the torrent to the DHT
 		// immediately.
-		void force_reannounce(int seconds = 0, int tracker_index = -1, reannounce_flags_t = {}) const;
+		//
+		// ``force_lsd_announce`` will announce the torrent on LSD
+		// immediately.
+		void force_reannounce(int seconds = 0, int idx = -1, reannounce_flags_t = {}) const;
 		void force_dht_announce() const;
+		void force_lsd_announce() const;
 
 #if TORRENT_ABI_VERSION == 1
 		// forces a reannounce in the specified amount of time.
@@ -1223,10 +1221,10 @@ namespace aux {
 		void super_seeding(bool on) const;
 #endif // TORRENT_ABI_VERSION
 
-		// ``info_hash()`` returns the info-hash of the torrent. If this handle
+		// ``info_hash()`` returns the info-hash(es) of the torrent. If this handle
 		// is to a torrent that hasn't loaded yet (for instance by being added)
 		// by a URL, the returned value is undefined.
-		sha1_hash info_hash() const;
+		info_hash_t info_hash() const;
 
 		// comparison operators. The order of the torrents is unspecified
 		// but stable.
@@ -1237,6 +1235,8 @@ namespace aux {
 		bool operator<(const torrent_handle& h) const
 		{ return m_torrent.owner_before(h.m_torrent); }
 
+		// returns a unique identifier for this torrent. It's not a dense index.
+		// It's not preserved across sessions.
 		std::uint32_t id() const
 		{
 			uintptr_t ret = reinterpret_cast<uintptr_t>(m_torrent.lock().get());
@@ -1268,8 +1268,7 @@ namespace aux {
 	};
 }
 
-namespace std
-{
+namespace std {
 	template <>
 	struct hash<libtorrent::torrent_handle>
 	{

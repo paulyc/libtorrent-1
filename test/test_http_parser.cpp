@@ -1,6 +1,7 @@
 /*
 
-Copyright (c) 2012, Arvid Norberg
+Copyright (c) 2013-2019, Arvid Norberg
+Copyright (c) 2018, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -517,7 +518,7 @@ TORRENT_TEST(chunked_encoding)
 	std::tuple<int, int, bool> const received
 		= feed_bytes(parser, chunked_input);
 
-	TEST_EQUAL(strlen(chunked_input), 24 + 94)
+	TEST_EQUAL(strlen(chunked_input), 24 + 94);
 	TEST_CHECK(received == std::make_tuple(24, 94, false));
 	TEST_CHECK(parser.finished());
 
@@ -527,6 +528,24 @@ TORRENT_TEST(chunked_encoding)
 	body = parser.collapse_chunk_headers({mutable_buffer, body.size()});
 
 	TEST_CHECK(body == span<char const>("test12340123456789abcdef", 24));
+}
+
+TORRENT_TEST(chunked_encoding_overflow)
+{
+	char const chunked_input[] =
+		"HTTP/1.1 200 OK\r\n"
+		"Transfer-Encoding: chunked\r\n"
+		"\r\n"
+		"7FFFFFFFFFFFFFBF\r\n";
+
+	http_parser parser;
+	int payload;
+	int protocol;
+	bool error = false;
+	std::tie(payload, protocol) = parser.incoming(chunked_input, error);
+
+	// it should have encountered an error
+	TEST_CHECK(error == true);
 }
 
 TORRENT_TEST(invalid_content_length)

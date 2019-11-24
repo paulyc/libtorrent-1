@@ -1,6 +1,9 @@
 /*
 
-Copyright (c) 2006-2018, Arvid Norberg, Magnus Jonsson
+Copyright (c) 2003, Magnus Jonsson
+Copyright (c) 2003, 2006-2019, Arvid Norberg
+Copyright (c) 2016, Alden Torres
+Copyright (c) 2017, Steven Siloti
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -39,6 +42,8 @@ POSSIBILITY OF SUCH DAMAGE.
 #include "libtorrent/aux_/session_impl.hpp"
 #include "libtorrent/aux_/session_call.hpp"
 #include "libtorrent/extensions.hpp" // for add_peer_flags_t
+#include "libtorrent/disk_interface.hpp"
+#include "libtorrent/posix_disk_io.hpp"
 
 namespace libtorrent {
 
@@ -146,10 +151,6 @@ namespace {
 		// the send buffer
 		set.set_int(settings_pack::send_buffer_watermark, 9);
 
-		// don't use any disk cache
-		set.set_int(settings_pack::cache_size, 0);
-		set.set_bool(settings_pack::use_read_cache, false);
-
 		set.set_bool(settings_pack::close_redundant_connections, true);
 
 		set.set_int(settings_pack::max_peerlist_size, 500);
@@ -162,11 +163,6 @@ namespace {
 
 		set.set_int(settings_pack::recv_socket_buffer_size, 16 * 1024);
 		set.set_int(settings_pack::send_socket_buffer_size, 16 * 1024);
-
-		// use less memory when reading and writing
-		// whole pieces
-		set.set_bool(settings_pack::coalesce_reads, false);
-		set.set_bool(settings_pack::coalesce_writes, false);
 		return set;
 	}
 
@@ -208,22 +204,8 @@ namespace {
 		// unchoke many peers
 		set.set_int(settings_pack::unchoke_slots_limit, 2000);
 
-		// use 1 GB of cache
-		set.set_int(settings_pack::cache_size, 32768 * 2);
-		set.set_bool(settings_pack::use_read_cache, true);
 		set.set_int(settings_pack::read_cache_line_size, 32);
 		set.set_int(settings_pack::write_cache_line_size, 256);
-		// 30 seconds expiration to save cache
-		// space for active pieces
-		set.set_int(settings_pack::cache_expiry, 30);
-
-		// in case the OS we're running on doesn't support
-		// readv/writev, allocate contiguous buffers for
-		// reads and writes
-		// disable, since it uses a lot more RAM and a significant
-		// amount of CPU to copy it around
-		set.set_bool(settings_pack::coalesce_reads, false);
-		set.set_bool(settings_pack::coalesce_writes, false);
 
 		// the max number of bytes pending write before we throttle
 		// download rate
@@ -287,7 +269,13 @@ namespace {
 		bdecode_node settings;
 		if (e.type() != bdecode_node::dict_t) return params;
 
-		if (flags & session_handle::save_settings)
+		if ((flags & session_handle::save_settings)
+#if TORRENT_ABI_VERSION <= 2
+			// just in case someone is saving *just* the dht_settings, save all
+			// settings, since the DHT settings are part of them now
+			|| (flags & session_handle::save_dht_settings)
+#endif
+			)
 		{
 			settings = e.dict_find_dict("settings");
 			if (settings)
@@ -297,14 +285,17 @@ namespace {
 		}
 
 #ifndef TORRENT_DISABLE_DHT
+#if TORRENT_ABI_VERSION <= 2
 		if (flags & session_handle::save_dht_settings)
 		{
 			settings = e.dict_find_dict("dht");
-			if (settings)
+			if (settings && settings.type() == bdecode_node::dict_t)
 			{
 				params.dht_settings = dht::read_dht_settings(settings);
+				aux::apply_deprecated_dht_settings(params.settings, settings);
 			}
 		}
+#endif
 
 		if (flags & session_handle::save_dht_state)
 		{
@@ -319,18 +310,61 @@ namespace {
 		return params;
 	}
 
-	void session::start(session_params&& params, io_service* ios)
+	void session::start(session_params&& params, io_context* ios)
 	{
 		bool const internal_executor = ios == nullptr;
 
 		if (internal_executor)
 		{
 			// the user did not provide an executor, we have to use our own
-			m_io_service = std::make_shared<io_service>();
+			m_io_service = std::make_shared<io_context>(1);
 			ios = m_io_service.get();
 		}
 
-		m_impl = std::make_shared<aux::session_impl>(std::ref(*ios), std::ref(params.settings));
+#if TORRENT_ABI_VERSION <= 2
+#ifndef TORRENT_DISABLE_DHT
+		// in case the session_params has its dht_settings in use, pick out the
+		// non-default settings from there and move them into the main settings.
+		// any conflicting options set in main settings take precedence
+		{
+		dht::dht_settings const def_sett{};
+#define SET_BOOL(name) if (!params.settings.has_val(settings_pack::dht_ ## name) && \
+	def_sett.name != params.dht_settings.name) \
+		params.settings.set_bool(settings_pack::dht_ ## name, params.dht_settings.name)
+#define SET_INT(name) if (!params.settings.has_val(settings_pack::dht_ ## name) && \
+	def_sett.name != params.dht_settings.name) \
+		params.settings.set_int(settings_pack::dht_ ## name, params.dht_settings.name)
+
+		SET_INT(max_peers_reply);
+		SET_INT(search_branching);
+		SET_INT(max_fail_count);
+		SET_INT(max_torrents);
+		SET_INT(max_dht_items);
+		SET_INT(max_peers);
+		SET_INT(max_torrent_search_reply);
+		SET_BOOL(restrict_routing_ips);
+		SET_BOOL(restrict_search_ips);
+		SET_BOOL(extended_routing_table);
+		SET_BOOL(aggressive_lookups);
+		SET_BOOL(privacy_lookups);
+		SET_BOOL(enforce_node_id);
+		SET_BOOL(ignore_dark_internet);
+		SET_INT(block_timeout);
+		SET_INT(block_ratelimit);
+		SET_BOOL(read_only);
+		SET_INT(item_lifetime);
+		SET_INT(upload_rate_limit);
+		SET_INT(sample_infohashes_interval);
+		SET_INT(max_infohashes_sample_count);
+#undef SET_BOOL
+#undef SET_INT
+		}
+#endif
+#endif
+
+		m_impl = std::make_shared<aux::session_impl>(std::ref(*ios)
+			, std::move(params.settings)
+			, std::move(params.disk_io_constructor));
 		*static_cast<session_handle*>(this) = session_handle(m_impl);
 
 #ifndef TORRENT_DISABLE_EXTENSIONS
@@ -341,7 +375,6 @@ namespace {
 #endif
 
 #ifndef TORRENT_DISABLE_DHT
-		m_impl->set_dht_settings(std::move(params.dht_settings));
 		m_impl->set_dht_state(std::move(params.dht_state));
 
 		TORRENT_ASSERT(params.dht_storage_constructor);
@@ -378,11 +411,14 @@ namespace {
 		}
 	}
 
-	void session::start(session_flags_t const flags, settings_pack&& sp, io_service* ios)
+	void session::start(session_flags_t const flags, settings_pack&& sp, io_context* ios)
 	{
 		start({std::move(sp),
 			default_plugins(!(flags & add_default_plugins))}, ios);
 	}
+
+	session::session(session&&) = default;
+	session& session::operator=(session&&) & = default;
 
 	session::~session()
 	{
@@ -411,7 +447,7 @@ namespace {
 	}
 
 	session_proxy::session_proxy() = default;
-	session_proxy::session_proxy(std::shared_ptr<io_service> ios
+	session_proxy::session_proxy(std::shared_ptr<io_context> ios
 		, std::shared_ptr<std::thread> t
 		, std::shared_ptr<aux::session_impl> impl)
 		: m_io_service(std::move(ios))
@@ -419,9 +455,9 @@ namespace {
 		, m_impl(std::move(impl))
 	{}
 	session_proxy::session_proxy(session_proxy const&) = default;
-	session_proxy& session_proxy::operator=(session_proxy const&) = default;
+	session_proxy& session_proxy::operator=(session_proxy const&) & = default;
 	session_proxy::session_proxy(session_proxy&&) noexcept = default;
-	session_proxy& session_proxy::operator=(session_proxy&&) noexcept = default;
+	session_proxy& session_proxy::operator=(session_proxy&&) & noexcept = default;
 	session_proxy::~session_proxy()
 	{
 		if (m_thread && m_thread.unique())
@@ -432,6 +468,8 @@ namespace {
 			m_thread->join();
 		}
 	}
+
+TORRENT_VERSION_NAMESPACE_3
 
 	session_params::session_params(settings_pack&& sp)
 		: session_params(std::move(sp), default_plugins())
@@ -457,7 +495,7 @@ namespace {
 #endif
 	{}
 
-	session_params::session_params(settings_pack const& sp
+	session_params::session_params(settings_pack const& sp // NOLINT
 		, std::vector<std::shared_ptr<plugin>> exts)
 		: settings(sp)
 		, extensions(std::move(exts))
@@ -465,4 +503,22 @@ namespace {
 		, dht_storage_constructor(dht::dht_default_storage_constructor)
 #endif
 	{}
+
+	session_params::session_params(session_params const&) = default;
+	session_params::session_params(session_params&&) = default;
+	session_params& session_params::operator=(session_params const&) & = default;
+	session_params& session_params::operator=(session_params&&) & = default;
+
+TORRENT_VERSION_NAMESPACE_3_END
+
+	TORRENT_EXPORT std::unique_ptr<disk_interface> default_disk_io_constructor(
+		io_context& ios, settings_interface const& sett, counters& cnt)
+	{
+#if TORRENT_HAVE_MMAP || TORRENT_HAVE_MAP_VIEW_OF_FILE
+		return mmap_disk_io_constructor(ios, sett, cnt);
+#else
+		return posix_disk_io_constructor(ios, sett, cnt);
+#endif
+	}
+
 }

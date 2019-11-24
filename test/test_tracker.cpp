@@ -1,6 +1,11 @@
 /*
 
-Copyright (c) 2010, Arvid Norberg
+Copyright (c) 2011-2019, Arvid Norberg
+Copyright (c) 2015, Mikhail Titov
+Copyright (c) 2016, terry zhao
+Copyright (c) 2016-2018, Alden Torres
+Copyright (c) 2017-2018, Steven Siloti
+Copyright (c) 2018, d-komarov
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -70,7 +75,7 @@ TORRENT_TEST(parse_hostname_peers)
 		"7:peer id20:bbbbabaababababababa2:ip12:another_host4:porti1001eeee";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 2);
@@ -94,7 +99,7 @@ TORRENT_TEST(parse_peers4)
 		"\x09\x08\x07\x06\x20\x10" "e";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers4.size(), 2);
@@ -110,6 +115,7 @@ TORRENT_TEST(parse_peers4)
 	}
 }
 
+#if TORRENT_USE_I2P
 TORRENT_TEST(parse_i2p_peers)
 {
 	// d8:completei8e10:incompletei4e8:intervali3600e5:peers352: ...
@@ -171,13 +177,14 @@ TORRENT_TEST(parse_i2p_peers)
 			, "ufunemgwuun5t2sn3oay4zv7jvwdezwcrirgwr6b2fjgczvaowvq.b32.i2p");
 	}
 }
+#endif // TORRENT_USE_I2P
 
 TORRENT_TEST(parse_interval)
 {
 	char const response[] = "d8:intervali1042e12:min intervali10e5:peers0:e";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -191,7 +198,7 @@ TORRENT_TEST(parse_warning)
 	char const response[] = "d5:peers0:15:warning message12:test messagee";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -203,7 +210,7 @@ TORRENT_TEST(parse_failure_reason)
 	char const response[] = "d5:peers0:14:failure reason12:test messagee";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, errors::tracker_failure);
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -216,7 +223,7 @@ TORRENT_TEST(parse_scrape_response)
 		"8:completei1e10:incompletei2e10:downloadedi3e11:downloadersi6eeee";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, true, sha1_hash("aaaaaaaaaaaaaaaaaaaa"));
+		, ec, tracker_request::scrape_request, sha1_hash("aaaaaaaaaaaaaaaaaaaa"));
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.complete, 1);
@@ -231,7 +238,7 @@ TORRENT_TEST(parse_scrape_response_with_zero)
 		"8:completei4e10:incompletei5e10:downloadedi6eeee";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, true, sha1_hash("aaa\0aaaaaaaaaaaaaaaa"));
+		, ec, tracker_request::scrape_request, sha1_hash("aaa\0aaaaaaaaaaaaaaaa"));
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.complete, 4);
@@ -245,7 +252,7 @@ TORRENT_TEST(parse_external_ip)
 	char const response[] = "d5:peers0:11:external ip4:\x01\x02\x03\x04" "e";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -258,7 +265,7 @@ TORRENT_TEST(parse_external_ip6)
 		"16:\xf1\x02\x03\x04\0\0\0\0\0\0\0\0\0\0\xff\xff" "e";
 	error_code ec;
 	tracker_response resp = parse_tracker_response(response
-		, ec, false, sha1_hash());
+		, ec, {}, sha1_hash());
 
 	TEST_EQUAL(ec, error_code());
 	TEST_EQUAL(resp.peers.size(), 0);
@@ -345,7 +352,7 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	pack.set_bool(settings_pack::announce_to_all_tiers, true);
 	pack.set_str(settings_pack::listen_interfaces, iface + ":48875");
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp1_tracker", ec);
@@ -371,14 +378,14 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	{
 		print_alerts(*s, "s", false, false, std::bind(&connect_alert, _1, std::ref(peer_ep)));
 
-		if (num_udp_announces() == prev_udp_announces + 1)
+		if (num_udp_announces() == prev_udp_announces + 2)
 			break;
 
 		std::this_thread::sleep_for(lt::milliseconds(100));
 	}
 
-	// we should have announced to the tracker by now
-	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 1);
+	// expect two announces, one each for v1 and v2
+	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 2);
 
 	// if we remove the torrent before it has received the response from the
 	// tracker, it won't announce again to stop. So, wait a bit before removing.
@@ -389,7 +396,7 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	for (int i = 0; i < 50; ++i)
 	{
 		print_alerts(*s, "s", true, false, std::bind(&connect_alert, _1, std::ref(peer_ep)));
-		if (num_udp_announces() == prev_udp_announces + 2)
+		if (num_udp_announces() == prev_udp_announces + 4)
 			break;
 
 		std::this_thread::sleep_for(lt::milliseconds(100));
@@ -402,7 +409,7 @@ void test_udp_tracker(std::string const& iface, address tracker, tcp::endpoint c
 	std::printf("done\n");
 
 	// we should have announced the stopped event now
-	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 2);
+	TEST_EQUAL(num_udp_announces(), prev_udp_announces + 4);
 
 	stop_udp_tracker();
 }
@@ -424,7 +431,7 @@ TORRENT_TEST(udp_tracker_v6)
 
 TORRENT_TEST(http_peers)
 {
-	int http_port = start_web_server();
+	int const http_port = start_web_server();
 
 	settings_pack pack = settings();
 	pack.set_bool(settings_pack::announce_to_all_trackers, true);
@@ -433,7 +440,7 @@ TORRENT_TEST(http_peers)
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp2_tracker", ec);
@@ -443,7 +450,6 @@ TORRENT_TEST(http_peers)
 	file.close();
 
 	char tracker_url[200];
-	// and this should not be announced to (since the one before it succeeded)
 	std::snprintf(tracker_url, sizeof(tracker_url), "http://127.0.0.1:%d/announce"
 		, http_port);
 	t->add_tracker(tracker_url, 0);
@@ -464,7 +470,7 @@ TORRENT_TEST(http_peers)
 
 	status = h.status();
 	TEST_CHECK(!status.current_tracker.empty());
-	TEST_CHECK(status.current_tracker == tracker_url);
+	TEST_EQUAL(status.current_tracker, tracker_url);
 
 	// we expect to have certain peers in our peer list now
 	// these peers are hard coded in web_server.py
@@ -507,7 +513,7 @@ TORRENT_TEST(current_tracker)
 	pack.set_int(settings_pack::tracker_receive_timeout, 1);
 	pack.set_str(settings_pack::listen_interfaces, "0.0.0.0:39775");
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp3_tracker", ec);
@@ -567,7 +573,7 @@ void test_proxy(bool proxy_trackers)
 	pack.set_int(settings_pack::proxy_port, 4444);
 	pack.set_bool(settings_pack::proxy_tracker_connections, proxy_trackers);
 
-	std::unique_ptr<lt::session> s(new lt::session(pack));
+	auto s = std::make_unique<lt::session>(pack);
 
 	error_code ec;
 	remove_all("tmp2_tracker", ec);
@@ -690,12 +696,14 @@ void test_stop_tracker_timeout(int const timeout)
 	h.add_tracker(ae);
 
 	// make sure it announced a event=started properly
-	wait_for_alert(s, tracker_reply_alert::alert_type, "s");
+	// expect announces for v1 and v2 info hashes
+	for (int i = 0; i < 2; ++i)
+		wait_for_alert(s, tracker_reply_alert::alert_type, "s");
 
 	s.remove_torrent(h);
 
-	int const count = count_stopped_events(s, (timeout == 0) ? 0 : 1);
-	TEST_EQUAL(count, (timeout == 0) ? 0 : 1);
+	int const count = count_stopped_events(s, (timeout == 0) ? 0 : 2);
+	TEST_EQUAL(count, (timeout == 0) ? 0 : 2);
 }
 } // anonymous namespace
 

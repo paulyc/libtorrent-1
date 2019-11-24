@@ -16,6 +16,7 @@ endif
 REFERENCE_TARGETS = \
 	manual-ref \
 	upgrade_to_1.2-ref \
+	upgrade_to_2.0-ref \
 	reference \
 	reference-Core \
 	reference-Plugins \
@@ -50,7 +51,8 @@ MANUAL_TARGETS = index \
 	tuning \
 	hacking \
 	streaming \
-	tutorial
+	tutorial \
+	fuzzing
 
 TARGETS = single-page-ref \
 	$(MANUAL_TARGETS) \

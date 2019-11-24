@@ -1,6 +1,7 @@
 /*
 
-Copyright (c) 2014-2018, Arvid Norberg
+Copyright (c) 2014, 2017-2019, Arvid Norberg
+Copyright (c) 2016, Alden Torres
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -39,7 +40,9 @@ POSSIBILITY OF SUCH DAMAGE.
 
 namespace libtorrent {
 
-	namespace aux { struct session_settings; }
+namespace aux {
+	struct session_settings;
+}
 	class peer_connection;
 
 	// sorts the vector of peers in-place. When returning, the top unchoke slots
